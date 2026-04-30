@@ -1,0 +1,39 @@
+# Core
+Django==5.0.6
+djangorestframework==3.15.2
+django-tenants==3.6.1
+psycopg2-binary==2.9.9
+
+# Authentication
+djangorestframework-simplejwt==5.3.1
+django-cors-headers==4.4.0
+
+# Celery & Redis
+celery==5.4.0
+redis==5.0.8
+django-celery-beat==2.6.0
+django-celery-results==2.5.1
+
+# Storage & Images
+Pillow==10.4.0
+django-storages==1.14.4
+boto3==1.35.0
+
+# HTTP & APIs
+requests==2.32.3
+urllib3==2.2.2
+
+# Environment
+python-decouple==3.8
+python-dotenv==1.0.1
+
+# Africa's Talking
+africastalking==1.2.5
+
+# Utilities
+django-filter==24.3
+drf-spectacular==0.27.2
+
+# Production
+gunicorn==22.0.0
+whitenoise==6.7.0
