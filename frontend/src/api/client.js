@@ -1,58 +1,105 @@
-import axios from 'axios';
+import axios from 'axios'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+/**
+ * Determines the API base URL from the current subdomain 
+ * 
+ * In production:
+ *    stmarys.myapp.co.ke -> https://stmarys.myapp.co.ke/api
+ * 
+ * In local dev:
+ *    localhost:3000 -> http://localhost:8000/api (via Vite proxy)
+ */
 
-// Create axios instances per tenant
-const createTenantClient = (tenantId) => {
-  return axios.create({
-    baseURL: `${API_BASE_URL}`,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Tenant-ID': tenantId,
-    },
-  });
-};
+function getBaseURL() {
+  const hostname = window.location.hostname
 
-// Default client
-export const apiClient = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
+  if (hostname === 'localhost' || hostname === '127.0.0.1' ) {
+    return '/api'
+  } 
 
-// Add request interceptor for token
-apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  // extract sub domains for production 
+  const parts = hostname.split('.')
+  if (parts.length >= 3) {
+    return `https://${hostname}/api`
   }
-  return config;
-});
 
-// Add response interceptor for token refresh
-apiClient.interceptors.response.use(
+  return '/api' // default fallback
+}
+
+const api = axios.create({
+  baseURL: getBaseURL(),
+  headers: { 'Content-Type': 'application/json' },
+  withCredentials: true, // include cookies for authentication
+})
+
+// __ Request interceptor: attach JWT Access token ________________________
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('access_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+}, 
+  (error) => Promise.reject(error)
+)
+
+// ____ Response interceptor: auto-refresh on 401 ________________________
+
+let isRefreshing = false
+let refreshQueue = []
+
+api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const originalRequest = error.config;
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      originalRequest._retry = true;
+    const original = error.config
+
+    if (error.response?.status === 401 && !original._retry) {
+      if (isRefreshing) {
+        // Queue requests while refreshing
+        return new Promise((resolve, reject) => {
+          refreshQueue.push({ resolve, reject })
+        }).then((token) => {
+          original.headers.Authorization = `Bearer ${token}`
+          return api(original)
+        })
+      }
+
+      original._retry = true
+      isRefreshing = true
+
+      const refreshToken = localStorage.getItem('refresh_token')
+      if (!refreshToken) {
+        useAuthStore.getState().logout()
+        return Promise.reject(error)
+      }
+
       try {
-        const refreshToken = localStorage.getItem('refresh_token');
-        const response = await axios.post(`${API_BASE_URL}/auth/token/refresh/`, {
+        const { data } = await axios.post(`${getBaseURL()}/auth/token/refresh/`, {
           refresh: refreshToken,
-        });
-        localStorage.setItem('access_token', response.data.access);
-        apiClient.defaults.headers.Authorization = `Bearer ${response.data.access}`;
-        return apiClient(originalRequest);
-      } catch (err) {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        window.location.href = '/login';
+        })
+
+        const newAccess = data.access
+        localStorage.setItem('access_token', newAccess)
+
+        refreshQueue.forEach(({ resolve }) => resolve(newAccess))
+        refreshQueue = []
+
+        original.headers.Authorization = `Bearer ${newAccess}`
+        return api(original)
+      } catch (refreshError) {
+        refreshQueue.forEach(({ reject }) => reject(refreshError))
+        refreshQueue = []
+        // Import lazily to avoid circular dep
+        const { useAuthStore } = await import('@/store/authStore')
+        useAuthStore.getState().logout()
+        return Promise.reject(refreshError)
+      } finally {
+        isRefreshing = false
       }
     }
-    return Promise.reject(error);
-  }
-);
 
-export default createTenantClient;
+    return Promise.reject(error)
+  }
+)
+
+export default api
