@@ -10,7 +10,13 @@ SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-secret-key')
 
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+_allowed = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,0.0.0.0,::1')
+ALLOWED_HOSTS = [host.strip() for host in _allowed.split(',') if host.strip()]
+
+# DebugLine (What django actualy sees remove in production )
+#if DEBUG:
+#   print(f"ALLOWED_HOSTS loaded : {ALLOWED_HOSTS}")
+#   print(f"DEBUG mode: {DEBUG}")
 
 INSTALLED_APPS = [
     'django.contrib.admin',
