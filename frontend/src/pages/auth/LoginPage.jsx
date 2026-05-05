@@ -4,7 +4,9 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Eye, EyeOff, GraduationCap, Loader2 } from 'lucide-react'
+import { authAPI } from '@/api/auth'
 import { useAuthStore } from '@/store/authStore'
+import { ROLE_DASHBOARDS } from '@/components/auth/ProtectedRoute'
 import { cn } from '@/lib/utils'
 
 const schema = z.object({
@@ -26,16 +28,16 @@ export default function LoginPage() {
 
   const onSubmit = async ({ email, password }) => {
     setServerError('')
-    // Temporary mock - replace with real API call later
-    if (email === 'admin@demo.co.ke' && password === 'demo1234') {
-      setAuth(
-        { email, first_name: 'Demo', last_name: 'Admin', role: 'admin' },
-        'fake-access-token',
-        'fake-refresh-token'
+    try {
+      const { data } = await authAPI.login({ email, password })
+      setAuth(data.user, data.access, data.refresh)
+      navigate(ROLE_DASHBOARDS[data.user?.role] || '/dashboard')
+    } catch (error) {
+      setServerError(
+        error.response?.data?.detail ||
+        error.response?.data?.non_field_errors?.[0] ||
+        'Invalid email or password'
       )
-      navigate('/dashboard')
-    } else {
-      setServerError('Invalid email or password')
     }
   }
 

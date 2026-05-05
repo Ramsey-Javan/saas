@@ -1,1 +1,6 @@
-// Students pages placeholder
+export { default as StudentsPage } from './StudentsPage'
+export { default as StudentDetailPage } from './StudentDetailPage'
+export { default as AdmitStudentPage } from './AdmitStudentPage'
+export { default as BulkImportPage } from './BulkImportPage'
+export { default as StudentIdCardPage } from './StudentIdCardPage'
+// export { default as TransferStudentPage } from './TransferStudentPage'
