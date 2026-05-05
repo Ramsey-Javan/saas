@@ -1,7 +1,7 @@
 import api from './client'  
 
 export const authAPI = {
-  login: (credentials) => api.post('/auth/login/', credentials),
+  login: ({ email, password }) => api.post('/auth/token/', { email, password }),
   register: (data) => api.post('/auth/register/', data),
   refresh: (refreshToken) => api.post('/auth/token/refresh/', { refresh: refreshToken }),
   verify: (token) => api.post('/auth/token/verify/', { token }),

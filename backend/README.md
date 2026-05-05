@@ -27,6 +27,9 @@ python manage.py migrate
 # Create superuser
 python manage.py createsuperuser
 
+# Or seed a local demo tenant + login
+python manage.py setup_demo
+
 # Run development server
 python manage.py runserver
 ```

@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { useAuthStore } from '@/store/authStore'
 
 /**
  * Determines the API base URL from the current subdomain 
@@ -89,8 +90,6 @@ api.interceptors.response.use(
       } catch (refreshError) {
         refreshQueue.forEach(({ reject }) => reject(refreshError))
         refreshQueue = []
-        // Import lazily to avoid circular dep
-        const { useAuthStore } = await import('@/store/authStore')
         useAuthStore.getState().logout()
         return Promise.reject(refreshError)
       } finally {
