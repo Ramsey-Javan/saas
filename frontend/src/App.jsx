@@ -1,8 +1,20 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'  
 import { ProtectedRoute, GuestRoute, ROLE_DASHBOARDS } from '@/components/auth/ProtectedRoute'
 import { useAuthStore } from '@/store/authStore'  
-import { AdminDashboard, TeacherDashboard, BursarPage, ParentDashboard } from '@/pages/dashboard'
+import { AdminDashboard, TeacherDashboard, ParentDashboard } from '@/pages/dashboard'
 import { StudentsPage, StudentDetailPage, AdmitStudentPage, BulkImportPage, StudentIdCardPage } from '@/pages/students'
+import BursarDashboard from '@/pages/finance/BursarDashboard'
+import InvoicesListPage from '@/pages/finance/InvoicesListPage'
+import FeeStructuresPage from '@/pages/finance/FeeStructuresPage'
+import InvoiceGenerationPage from '@/pages/finance/InvoiceGenerationPage'
+import DefaultersListPage from '@/pages/finance/DefaultersListPage'
+import PaymentsPage from '@/pages/finance/PaymentsPage'
+import ReceiptsPage from '@/pages/finance/ReceiptsPage'
+import StudentStatementPage from '@/pages/finance/StudentStatementPage'
+import PendingChequesPage from '@/pages/finance/PendingChequesPage'
+import WaiverPoliciesPage from '@/pages/finance/WaiverPoliciesPage'
+import WaiversReportPage from '@/pages/finance/WaiversReportPage'
+import WaiversDashboardPage from '@/pages/finance/WaiversDashboardPage'
 import AppShell from '@/components/layout/AppShell'
 import  LoginPage  from '@/pages/auth/LoginPage'  
 import './App.css'
@@ -30,7 +42,18 @@ export default function App() {
         <Route path="/login" element={<GuestRoute><LoginPage /></GuestRoute>} />
         <Route path="/dashboard" element={<ProtectedShell allowedRoles={['admin','superadmin']}><AdminDashboard /></ProtectedShell>} />
         <Route path="/teacher" element={<ProtectedShell allowedRoles={['teacher']}><TeacherDashboard /></ProtectedShell>} />
-        <Route path="/finance" element={<ProtectedShell allowedRoles={['bursar']}><BursarPage /></ProtectedShell>} />
+        <Route path="/finance" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar']}><BursarDashboard /></ProtectedShell>} />
+        <Route path="/finance/payments" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar']}><PaymentsPage /></ProtectedShell>} />
+        <Route path="/finance/receipts" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar']}><ReceiptsPage /></ProtectedShell>} />
+        <Route path="/finance/cheques" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar']}><PendingChequesPage /></ProtectedShell>} />
+        <Route path="/finance/structures" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar']}><FeeStructuresPage /></ProtectedShell>} />
+        <Route path="/finance/invoices/generate" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar']}><InvoiceGenerationPage /></ProtectedShell>} />
+        <Route path="/finance/invoices" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar']}><InvoicesListPage /></ProtectedShell>} />
+        <Route path="/finance/defaulters" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar']}><DefaultersListPage /></ProtectedShell>} />
+        <Route path="/finance/waivers" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar']}><WaiversReportPage /></ProtectedShell>} />
+        <Route path="/finance/waivers-dashboard" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar']}><WaiversDashboardPage /></ProtectedShell>} />
+        <Route path="/finance/waiver-policies" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar']}><WaiverPoliciesPage /></ProtectedShell>} />
+        <Route path="/finance/students/:studentId/statement" element={<ProtectedShell allowedRoles={['admin','superadmin','bursar','parent']}><StudentStatementPage /></ProtectedShell>} />
         <Route path="/parent" element={<ProtectedShell allowedRoles={['parent']}><ParentDashboard /></ProtectedShell>} />
         <Route path="/students" element={<ProtectedShell allowedRoles={['admin','bursar','teacher']}><StudentsPage /></ProtectedShell>} />
         <Route path="/students/new" element={<ProtectedShell allowedRoles={['admin','bursar']}><AdmitStudentPage /></ProtectedShell>} />

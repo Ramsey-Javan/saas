@@ -14,7 +14,7 @@ class SMSLog(models.Model):
     message = models.TextField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     provider = models.CharField(max_length=50, default='africas_talking')
-    reference_id = models.CharField(max_length=100, unique=True, blank=True)
+    reference_id = models.CharField(max_length=100, unique=True, blank=True, null=True)
     error_message = models.TextField(blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

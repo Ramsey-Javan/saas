@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Edit2, Phone, BookOpen, User, CheckCircle, CreditCard } from 'lucide-react'
+import { ArrowLeft, Edit2, Phone, BookOpen, User, CheckCircle, CreditCard, DollarSign, Receipt } from 'lucide-react'
 import { studentsApi } from '@/api/students'
+import { financeApi } from '@/api/finance'
 import { useAuthStore } from '@/store/authStore'
 import { Card, Badge, Avatar, Button, Spinner, Select } from '@/components/ui'
+import PaymentModal from '@/components/finance/PaymentModal'
+import WaiverAssignmentModal from '@/components/finance/WaiverAssignmentModal'
 
 const listFromResponse = (data) => data?.results || (Array.isArray(data) ? data : [])
 
@@ -40,7 +43,10 @@ export default function StudentDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
   const canGenerateIdCard = useAuthStore(state => state.hasRole('admin', 'bursar'))
+  const user = useAuthStore(state => state.user)
   const [student, setStudent] = useState(null)
+  const [feeModalOpen, setFeeModalOpen] = useState(false)
+  const [studentFee, setStudentFee] = useState(null)
   const [loading, setLoading] = useState(true)
   const [transferLoading, setTransferLoading] = useState(false)
   const [statusLoading, setStatusLoading] = useState(false)
@@ -48,6 +54,8 @@ export default function StudentDetailPage() {
   const [selectedClassroom, setSelectedClassroom] = useState('')
   const [selectedStatus, setSelectedStatus] = useState('active')
   const [classrooms, setClassrooms] = useState([])
+  const [waiverModalOpen, setWaiverModalOpen] = useState(false)
+  const [activeWaivers, setActiveWaivers] = useState([])
 
   useEffect(() => {
     studentsApi.getStudent(id)
@@ -63,6 +71,24 @@ export default function StudentDetailPage() {
     studentsApi.getClassrooms().then(r => setClassrooms(listFromResponse(r.data)))
   }, [])
 
+  useEffect(() => {
+    const canViewFees = ['admin', 'bursar', 'finance'].includes(user?.role)
+    if (!canViewFees) return
+
+    financeApi.getWaivers({ student__id: id, is_active: true })
+      .then(r => setActiveWaivers(listFromResponse(r.data)))
+      .catch(() => setActiveWaivers([]))
+  }, [id, user])
+
+  useEffect(() => {
+    const canViewFees = ['admin', 'bursar', 'finance'].includes(user?.role)
+    if (!canViewFees) return
+
+    financeApi.getInvoices({ student: id })
+      .then(r => setStudentFee((r.data.results || r.data || [])[0] || null))
+      .catch(() => setStudentFee(null))
+  }, [id, user])
+
   const handleTransfer = async () => {
     if (!selectedClassroom) return
 
@@ -70,7 +96,16 @@ export default function StudentDetailPage() {
     setError('')
     try {
       await studentsApi.transferStudent(id, selectedClassroom)
-      navigate(0)
+      const [studentRes, invoiceRes, waiverRes] = await Promise.all([
+        studentsApi.getStudent(id),
+        financeApi.getInvoices({ student: id }),
+        financeApi.getWaivers({ student__id: id, is_active: true }),
+      ])
+      setStudent(studentRes.data)
+      setSelectedStatus(studentRes.data?.status || 'active')
+      setStudentFee((invoiceRes.data.results || invoiceRes.data || [])[0] || null)
+      setActiveWaivers(listFromResponse(waiverRes.data))
+      setSelectedClassroom('')
     } catch (err) {
       setError(`Transfer failed: ${err.response?.data?.detail || 'Try again'}`)
     } finally {
@@ -111,6 +146,7 @@ export default function StudentDetailPage() {
 
   const guardian = student.primary_guardian_data
   const classroom = student.classroom_data
+  const canTakePayment = ['admin', 'bursar', 'finance'].includes(user?.role)
 
   return (
     <div className="max-w-4xl">
@@ -165,6 +201,30 @@ export default function StudentDetailPage() {
             <InfoRow label="NEMIS UPI No." value={student.nemis_no} />
           </Card>
 
+          {activeWaivers.length > 0 && (
+            <Card className="p-5 border-l-4 border-l-emerald-500">
+              <h2 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <CheckCircle size={15} className="text-emerald-600" /> Active Waivers
+              </h2>
+              <div className="space-y-3">
+                {activeWaivers.map((waiver) => (
+                  <div key={waiver.id} className="rounded-lg bg-emerald-50 p-3 border border-emerald-100">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="font-medium text-gray-900">{waiver.policy_category}</p>
+                        <p className="text-xs text-gray-500">{waiver.policy_discount}</p>
+                      </div>
+                      <Badge label="Active" variant="active" />
+                    </div>
+                    <p className="mt-2 text-sm text-gray-600">
+                      {waiver.valid_until_year ? `Valid until ${waiver.valid_until_term} ${waiver.valid_until_year}` : 'Permanent waiver'}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
           <Card className="p-5">
             <h2 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
               <User size={15} className="text-blue-600" /> Personal Details
@@ -213,6 +273,39 @@ export default function StudentDetailPage() {
             )}
           </Card>
 
+          {(studentFee || canTakePayment) && (
+            <Card className="p-5 border-l-4 border-l-green-500">
+              <h2 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <DollarSign size={15} className="text-green-600" /> Fee Balance
+              </h2>
+              {studentFee ? (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Current Term</span>
+                    <span className="font-medium">{studentFee.fee_term} {studentFee.fee_academic_year}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Balance</span>
+                    <span className={`font-bold text-lg ${parseFloat(studentFee.balance) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      KES {parseFloat(studentFee.balance || 0).toLocaleString()}
+                    </span>
+                  </div>
+                  {canTakePayment && (
+                    <Button
+                      onClick={() => setFeeModalOpen(true)}
+                      className="w-full mt-3 gap-2"
+                      disabled={parseFloat(studentFee.balance) <= 0}
+                    >
+                      <Receipt size={16} /> Pay Now
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400">No outstanding fees</p>
+              )}
+            </Card>
+          )}
+
           {/* Quick actions */}
           <Card className="p-5">
             <h2 className="text-sm font-semibold text-gray-900 mb-3">Quick Actions</h2>
@@ -239,10 +332,20 @@ export default function StudentDetailPage() {
                 variant="secondary"
                 size="sm"
                 className="w-full justify-start gap-2"
-                onClick={() => navigate(`/finance?student=${id}`)}
+                onClick={() => navigate(`/finance/students/${id}/statement`)}
               >
                 View Fee Balance
               </Button>
+              {canTakePayment && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="w-full justify-start gap-2"
+                  onClick={() => setWaiverModalOpen(true)}
+                >
+                  Assign Waiver
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 size="sm"
@@ -284,6 +387,32 @@ export default function StudentDetailPage() {
           </Card>
         </div>
       </div>
+
+      <PaymentModal
+        isOpen={feeModalOpen}
+        onClose={() => setFeeModalOpen(false)}
+        student={student}
+        fee={studentFee}
+        onSuccess={() => {
+          setFeeModalOpen(false)
+          financeApi.getInvoices({ student: id }).then(r => setStudentFee((r.data.results || r.data || [])[0] || null))
+        }}
+      />
+
+      <WaiverAssignmentModal
+        isOpen={waiverModalOpen}
+        onClose={() => setWaiverModalOpen(false)}
+        student={student}
+        fee={studentFee}
+        onSuccess={() => {
+          financeApi.getInvoices({ student: id })
+            .then(r => setStudentFee((r.data.results || r.data || [])[0] || null))
+            .catch(() => setStudentFee(null))
+          financeApi.getWaivers({ student__id: id, is_active: true })
+            .then(r => setActiveWaivers(listFromResponse(r.data)))
+            .catch(() => setActiveWaivers([]))
+        }}
+      />
     </div>
   )
 }
