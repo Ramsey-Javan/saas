@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Users, DollarSign, BookOpen, TrendingUp, TrendingDown, ArrowUpCircle } from 'lucide-react'
+import { Users, DollarSign, BookOpen, TrendingUp, TrendingDown, ArrowUpCircle, FileText } from 'lucide-react'
 import { studentsApi } from '@/api/students'
+import { dashboardApi } from '@/api/dashboard'
+import { financeApi } from '@/api/finance'
 import { Card, Spinner } from '@/components/ui'
 
 function StatCard({ title, value, icon: Icon, trend, trendValue, color = 'blue', onClick }) {
@@ -10,6 +12,7 @@ function StatCard({ title, value, icon: Icon, trend, trendValue, color = 'blue',
     green: 'bg-green-50 text-green-600',
     purple: 'bg-purple-50 text-purple-600',
     orange: 'bg-orange-50 text-orange-600',
+    emerald: 'bg-emerald-50 text-emerald-600',
   }
 
   const interactiveProps = onClick
@@ -57,33 +60,57 @@ export default function AdminDashboard() {
     totalTeachers: 0,
     totalRevenue: 0,
     pendingFees: 0,
+    studentsChange: 0,
+    teachersChange: 0,
+    revenueChange: 0,
+    pendingChange: 0,
+    activeWaivers: 0,
+    waiversStudents: 0,
   })
+  const [recentActivity, setRecentActivity] = useState([])
   const [loading, setLoading] = useState(true)
   const [promoting, setPromoting] = useState(false)
   const [promotionMessage, setPromotionMessage] = useState('')
 
-  useEffect(() => {
-    // Fetch stats from API (you'll need to create this endpoint)
-    const fetchStats = async () => {
-      try {
-        const [studentsRes] = await Promise.all([
-          studentsApi.getStudents({ page: 1 }),
-          // Add more API calls as needed
-        ])
+  const fetchStats = async () => {
+    try {
+      const [dashRes, waiversRes] = await Promise.all([
+        dashboardApi.getStats(),
+        financeApi.getWaiverPoliciesDashboard().catch(() => ({ data: { results: [] } })),
+      ])
+      
+      const dashData = dashRes.data
+      const waiverPolicies = waiversRes.data.results || []
+      
+      // Count total students and policies
+      const totalStudentsInWaivers = new Set(
+        waiverPolicies.reduce((acc, policy) => {
+          // This is approximate - would need better backend data
+          return acc.concat(policy.student_count || 0)
+        }, [])
+      ).size || 0
 
-        setStats({
-          totalStudents: studentsRes.data.count || 0,
-          totalTeachers: 12, // Replace with actual API call
-          totalRevenue: 1250000, // Replace with actual API call
-          pendingFees: 345000, // Replace with actual API call
-        })
-      } catch (err) {
-        console.error('Failed to fetch stats:', err)
-      } finally {
-        setLoading(false)
-      }
+      setStats({
+        totalStudents: dashData.total_students || 0,
+        totalTeachers: dashData.total_teachers || 0,
+        totalRevenue: dashData.total_revenue || 0,
+        pendingFees: dashData.pending_fees || 0,
+        studentsChange: dashData.students_change || 0,
+        teachersChange: dashData.teachers_change || 0,
+        revenueChange: dashData.revenue_change || 0,
+        pendingChange: dashData.pending_change || 0,
+        activeWaivers: waiverPolicies.length || 0,
+        waiversStudents: waiverPolicies.reduce((sum, p) => sum + (p.student_count || 0), 0) || 0,
+      })
+      setRecentActivity(dashData.recent_activity || [])
+    } catch (err) {
+      console.error('Failed to fetch stats:', err)
+    } finally {
+      setLoading(false)
     }
+  }
 
+  useEffect(() => {
     fetchStats()
   }, [])
 
@@ -100,11 +127,7 @@ export default function AdminDashboard() {
       setPromotionMessage(
         `Promoted ${data.promoted_count}, graduated ${data.graduated_count}, skipped ${data.skipped_count}. PP1 remaining: ${data.pp1_remaining_count}.`
       )
-      const studentsRes = await studentsApi.getStudents({ page: 1 })
-      setStats(current => ({
-        ...current,
-        totalStudents: studentsRes.data.count || 0,
-      }))
+      await fetchStats()
     } catch (err) {
       setPromotionMessage(err.response?.data?.detail || 'Promotion failed. Please try again.')
     } finally {
@@ -129,13 +152,13 @@ export default function AdminDashboard() {
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
           <StatCard
             title="Total Students"
             value={stats.totalStudents}
             icon={Users}
-            trend="up"
-            trendValue="12"
+            trend={stats.studentsChange >= 0 ? 'up' : 'down'}
+            trendValue={Math.abs(stats.studentsChange)}
             color="blue"
             onClick={() => navigate('/students')}
           />
@@ -143,25 +166,32 @@ export default function AdminDashboard() {
             title="Total Teachers"
             value={stats.totalTeachers}
             icon={BookOpen}
-            trend="up"
-            trendValue="5"
+            trend={stats.teachersChange >= 0 ? 'up' : 'down'}
+            trendValue={Math.abs(stats.teachersChange)}
             color="purple"
           />
           <StatCard
             title="Total Revenue"
-            value={`KES ${(stats.totalRevenue / 1000).toFixed(0)}K`}
+            value={`KES ${parseFloat(stats.totalRevenue || 0).toLocaleString()}`}
             icon={DollarSign}
-            trend="up"
-            trendValue="8"
+            trend={stats.revenueChange >= 0 ? 'up' : 'down'}
+            trendValue={Math.abs(stats.revenueChange)}
             color="green"
           />
           <StatCard
             title="Pending Fees"
-            value={`KES ${(stats.pendingFees / 1000).toFixed(0)}K`}
+            value={`KES ${parseFloat(stats.pendingFees || 0).toLocaleString()}`}
             icon={DollarSign}
-            trend="down"
-            trendValue="3"
+            trend={stats.pendingChange >= 0 ? 'up' : 'down'}
+            trendValue={Math.abs(stats.pendingChange)}
             color="orange"
+          />
+          <StatCard
+            title="Active Waivers"
+            value={stats.activeWaivers}
+            icon={FileText}
+            color="emerald"
+            onClick={() => navigate('/finance/waivers-dashboard')}
           />
         </div>
 
@@ -198,9 +228,22 @@ export default function AdminDashboard() {
 
           <Card className="p-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h2>
-            <div className="space-y-3 text-sm text-gray-600">
-              <p>No recent activity</p>
-            </div>
+            {recentActivity.length === 0 ? (
+              <div className="space-y-3 text-sm text-gray-600">
+                <p>No recent activity</p>
+              </div>
+            ) : (
+              <div className="space-y-3 text-sm text-gray-600">
+                {recentActivity.map((item, index) => (
+                  <div key={`${item.type}-${index}`} className="flex justify-between gap-4">
+                    <span>{item.description}</span>
+                    <span className="text-xs text-gray-400">
+                      {new Date(item.timestamp).toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </Card>
         </div>
     </div>

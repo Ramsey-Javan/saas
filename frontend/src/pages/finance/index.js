@@ -1,1 +1,11 @@
-// Finance pages placeholder
+export { default as BursarDashboard } from './BursarDashboard'
+export { default as InvoicesListPage } from './InvoicesListPage'
+export { default as FeeStructuresPage } from './FeeStructuresPage'
+export { default as InvoiceGenerationPage } from './InvoiceGenerationPage'
+export { default as DefaultersListPage } from './DefaultersListPage'
+export { default as PaymentsPage } from './PaymentsPage'
+export { default as ReceiptsPage } from './ReceiptsPage'
+export { default as StudentStatementPage } from './StudentStatementPage'
+export { default as PendingChequesPage } from './PendingChequesPage'
+export { default as WaiverPoliciesPage } from './WaiverPoliciesPage'
+export { default as WaiversReportPage } from './WaiversReportPage'

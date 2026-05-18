@@ -21,6 +21,7 @@ class Tenant(models.Model):
     slug = models.SlugField(unique=True, blank=True)
     domain = models.URLField(unique=True)
     registration_number = models.CharField(max_length=50, blank=True)
+    school_code = models.CharField(max_length=20, blank=True, default='')
     motto = models.CharField(max_length=200, blank=True)
     description = models.TextField(blank=True)
     email = models.EmailField(blank=True)

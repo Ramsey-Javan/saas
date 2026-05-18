@@ -10,6 +10,7 @@ export const ROLE_DASHBOARDS = {
   admin: '/dashboard',
   teacher: '/teacher',
   bursar: '/finance',
+  finance: '/finance',
   parent: '/parent',
 }
 

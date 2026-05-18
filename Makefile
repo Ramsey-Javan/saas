@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs ps shell bash migrate makemigrations createsuperuser test setup-demo frontend-install frontend-dev frontend-build frontend-preview frontend-lint clean
+.PHONY: help build up down restart logs ps shell bash migrate makemigrations createsuperuser test setup-demo setup_demo frontend-install frontend-dev frontend-build frontend-preview frontend-lint clean
 
 COMPOSE := docker compose
 BACKEND := $(COMPOSE) exec backend python manage.py
@@ -19,6 +19,7 @@ help:
 	@echo "  make createsuperuser    Create a Django superuser"
 	@echo "  make test               Run Django tests"
 	@echo "  make setup-demo         Load demo data"
+	@echo "  make setup_demo         Load demo data (alias)"
 	@echo "  make frontend-install   Install frontend dependencies"
 	@echo "  make frontend-dev       Start Vite dev server"
 	@echo "  make frontend-build     Build frontend assets"
@@ -63,6 +64,8 @@ test:
 
 setup-demo:
 	$(BACKEND) setup_demo
+
+setup_demo: setup-demo
 
 frontend-install:
 	npm --prefix $(FRONTEND_DIR) install

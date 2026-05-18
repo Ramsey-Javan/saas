@@ -1,9 +1,13 @@
+from decimal import Decimal
+
 from rest_framework import generics, filters, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Q
+from django.db import transaction
+from django.db.models import DecimalField, Q, Sum, Value
+from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 import csv
 from .utils import parse_student_csv, promote_all_students_to_next_grade
@@ -12,6 +16,8 @@ from accounts.views import IsSchoolAdmin, IsTeacher
 from rest_framework.permissions import IsAuthenticated
 
 from .models import Student, Guardian, Classroom
+from finance.models import CONFIRMED_PAYMENT_STATUSES, FeeStructure, Payment, StudentFee
+from finance.utils import calculate_waived_amount, get_sibling_discount
 from .serializers import (
     ClassroomSerializer,
     GuardianSerializer,
@@ -204,6 +210,102 @@ class StudentSearchView(APIView):
         return Response(StudentListSerializer(students, many=True).data)
 
 
+def _recalculate_invoice(invoice):
+    if not invoice:
+        return None
+
+    money_zero = Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2))
+    total_paid = (
+        Payment.objects.filter(student_fee=invoice, status__in=CONFIRMED_PAYMENT_STATUSES)
+        .aggregate(total=Coalesce(Sum('amount'), money_zero))
+        .get('total')
+        or Decimal('0.00')
+    )
+    total_due = max(
+        Decimal('0.00'),
+        invoice.expected_amount + invoice.carried_forward + invoice.penalty_amount - invoice.waived_amount,
+    )
+
+    invoice.paid_amount = min(total_paid, total_due)
+    invoice.credit = max(Decimal('0.00'), total_paid - total_due)
+    if invoice.paid_amount >= total_due:
+        invoice.status = 'paid'
+    elif invoice.paid_amount > 0:
+        invoice.status = 'partial'
+    else:
+        invoice.status = 'unpaid'
+
+    invoice.save(update_fields=['paid_amount', 'credit', 'status', 'updated_at'])
+    return invoice
+
+
+def _sync_transfer_invoice(student, new_classroom, tenant):
+    current_invoice = (
+        StudentFee.objects.filter(student=student, tenant=tenant)
+        .select_related('fee_structure')
+        .order_by('-fee_structure__academic_year', '-fee_structure__term')
+        .first()
+    )
+    if not current_invoice:
+        return None
+
+    term = current_invoice.fee_structure.term
+    academic_year = current_invoice.fee_structure.academic_year
+    try:
+        new_structure = FeeStructure.objects.get(
+            tenant=tenant,
+            classroom=new_classroom,
+            term=term,
+            academic_year=academic_year,
+            is_active=True,
+        )
+    except FeeStructure.DoesNotExist:
+        return current_invoice
+
+    if current_invoice.fee_structure_id == new_structure.id:
+        return current_invoice
+
+    target_invoice = current_invoice
+    existing_invoice = StudentFee.objects.filter(
+        student=student,
+        tenant=tenant,
+        fee_structure=new_structure,
+    ).first()
+    if existing_invoice and existing_invoice.id != current_invoice.id:
+        Payment.objects.filter(student_fee=current_invoice).update(student_fee=existing_invoice)
+        current_invoice.delete()
+        target_invoice = existing_invoice
+    else:
+        target_invoice.fee_structure = new_structure
+
+    waived_amount, waiver = calculate_waived_amount(student, new_structure.base_amount, term, academic_year)
+    if waived_amount == 0:
+        sibling_policy = get_sibling_discount(student)
+        if sibling_policy:
+            if sibling_policy.discount_type == 'percentage':
+                waived_amount = new_structure.base_amount * (sibling_policy.discount_value / Decimal('100'))
+            else:
+                waived_amount = min(sibling_policy.discount_value, new_structure.base_amount)
+            waived_amount = waived_amount.quantize(Decimal('0.01'))
+
+    target_invoice.expected_amount = new_structure.base_amount
+    target_invoice.waived_amount = waived_amount
+    target_invoice.waiver = waiver
+    if new_structure.due_date:
+        target_invoice.due_date = new_structure.due_date
+
+    target_invoice.save(update_fields=[
+        'fee_structure',
+        'expected_amount',
+        'waived_amount',
+        'waiver',
+        'due_date',
+        'updated_at',
+    ])
+    _recalculate_invoice(target_invoice)
+    return target_invoice
+
+
 class StudentTransferView(APIView):
     """
     POST /api/students/<id>/transfer/
@@ -231,8 +333,10 @@ class StudentTransferView(APIView):
             return Response({'detail': 'Classroom not found.'}, status=400)
 
         old_class = str(student.classroom)
-        student.classroom = classroom
-        student.save()
+        with transaction.atomic():
+            student.classroom = classroom
+            student.save(update_fields=['classroom', 'updated_at'])
+            _sync_transfer_invoice(student, classroom, request.user.tenant)
 
         return Response({
             'detail': f'{student.get_full_name()} moved from {old_class} to {classroom}.',

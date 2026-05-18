@@ -1,12 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   GraduationCap, Users, DollarSign, BookOpen,
   MessageSquare, LayoutDashboard, LogOut,
-  Menu, X, ChevronRight, Settings,
+  Menu, X, ChevronRight, Settings, AlertCircle, FilePlus,
 } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { cn } from '@/lib/utils'
+import { financeApi } from '@/api/finance'
 
 // Navigation items per role
 const NAV_ITEMS = {
@@ -14,6 +15,8 @@ const NAV_ITEMS = {
     { label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
     { label: 'Students', icon: Users, href: '/students' },
     { label: 'Finance', icon: DollarSign, href: '/finance' },
+    { label: 'Pending Cheques', icon: AlertCircle, href: '/finance/cheques', badgeKey: 'pendingCheques' },
+    { label: 'Waivers Dashboard', icon: FilePlus, href: '/finance/waivers-dashboard' },
     { label: 'Academics', icon: BookOpen, href: '/academics' },
     { label: 'Communication', icon: MessageSquare, href: '/communication' },
     { label: 'Settings', icon: Settings, href: '/settings' },
@@ -33,7 +36,12 @@ const NAV_ITEMS = {
     { label: 'Finance', icon: LayoutDashboard, href: '/finance' },
     { label: 'Students', icon: Users, href: '/students' },
     { label: 'Payments', icon: DollarSign, href: '/finance/payments' },
+    { label: 'Pending Cheques', icon: AlertCircle, href: '/finance/cheques', badgeKey: 'pendingCheques' },
+    { label: 'Generate Invoices', icon: FilePlus, href: '/finance/invoices/generate' },
+    { label: 'Defaulters', icon: AlertCircle, href: '/finance/defaulters' },
     { label: 'Fee Structures', icon: DollarSign, href: '/finance/structures' },
+    { label: 'Waivers Dashboard', icon: FilePlus, href: '/finance/waivers-dashboard' },
+    { label: 'Waiver Policies', icon: Settings, href: '/finance/waiver-policies' },
     { label: 'Reports', icon: BookOpen, href: '/finance/reports' },
   ],
   parent: [
@@ -56,6 +64,11 @@ function NavItem({ item, collapsed }) {
     >
       <item.icon size={18} className="flex-shrink-0" />
       {!collapsed && <span className="font-medium">{item.label}</span>}
+      {!collapsed && item.badge > 0 && (
+        <span className="ml-auto bg-red-100 text-red-700 text-xs font-semibold px-2 py-0.5 rounded-full">
+          {item.badge}
+        </span>
+      )}
     </NavLink>
   )
 }
@@ -65,8 +78,24 @@ export default function AppShell({ children }) {
   const navigate = useNavigate()
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [pendingChequesCount, setPendingChequesCount] = useState(0)
 
-  const navItems = NAV_ITEMS[user?.role] || []
+  useEffect(() => {
+    if (!user || !['admin', 'superadmin', 'bursar'].includes(user.role)) {
+      setPendingChequesCount(0)
+      return
+    }
+    financeApi.getPayments({ payment_method: 'cheque', status: 'pending' }).then(res => {
+      const data = res.data
+      const count = data?.count ?? (data?.results ? data.results.length : (data?.length || 0))
+      setPendingChequesCount(count)
+    }).catch(() => setPendingChequesCount(0))
+  }, [user])
+
+  const navItems = (NAV_ITEMS[user?.role] || []).map(item => ({
+    ...item,
+    badge: item.badgeKey === 'pendingCheques' ? pendingChequesCount : 0,
+  }))
   const schoolName = school?.name || 'School Management'
   const primaryColor = school?.primary_color || '#2563eb'
 

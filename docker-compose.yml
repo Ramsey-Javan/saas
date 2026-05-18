@@ -1,5 +1,3 @@
-
-
 services:
   db:
     image: postgres:16-alpine
@@ -26,7 +24,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: python manage.py runserver 0.0.0.0:8000
+    # Removed the broken loop; service_healthy handles the wait
+    command: >
+      sh -c "python manage.py migrate && 
+             python manage.py runserver 0.0.0.0:8000"
     volumes:
       - ./backend:/app
     ports:
