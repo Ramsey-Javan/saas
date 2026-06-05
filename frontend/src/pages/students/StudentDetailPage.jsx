@@ -104,7 +104,7 @@ export default function StudentDetailPage() {
       setStudent(studentRes.data)
       setSelectedStatus(studentRes.data?.status || 'active')
       setStudentFee((invoiceRes.data.results || invoiceRes.data || [])[0] || null)
-      setActiveWaivers(listFromResponse(waiverRes.data))
+      setActiveWaiverslistFromResponse(waiverRes.data)
       setSelectedClassroom('')
     } catch (err) {
       setError(`Transfer failed: ${err.response?.data?.detail || 'Try again'}`)
@@ -350,9 +350,17 @@ export default function StudentDetailPage() {
                 variant="secondary"
                 size="sm"
                 className="w-full justify-start gap-2"
+                onClick={() => navigate(`/academics/report-cards?student=${id}`)}
+              >
+                View Report Cards
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="w-full justify-start gap-2"
                 onClick={() => navigate(`/academics/attendance?student=${id}`)}
               >
-                Attendance History
+                View Attendance
               </Button>
               {canGenerateIdCard && (
                 <Button

@@ -32,7 +32,7 @@ INSTALLED_APPS = [
     'accounts',
     'students',
     'finance',
-    'academics',
+    'academics.apps.AcademicsConfig',
     'communication',
 ]
 
@@ -126,3 +126,12 @@ AFRICA_TALKING = {
     'USERNAME': os.environ.get('AT_USERNAME', 'sandbox'),
     'SENDER_ID': os.environ.get('AT_SENDER_ID', ''),
 }
+
+TENANT_APPS = [
+    'accounts',
+    'students',
+    'finance',
+    'academics',
+    'communication',
+    'dashboard',
+]

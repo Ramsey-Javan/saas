@@ -28,6 +28,7 @@ export const studentsApi = {
   getClassrooms: (params) => api.get('/students/classrooms/', { params }),
   getClassroom: (id) => api.get(`/students/classrooms/${id}/`),
   createClassroom: (data) => api.post('/students/classrooms/', data),
+  getClassroomStudents: (id, params) => api.get(`/students/classrooms/${id}/students/`, { params }),
 
   // Guardians
   getGuardians: (params) => api.get('/students/guardians/', { params }),

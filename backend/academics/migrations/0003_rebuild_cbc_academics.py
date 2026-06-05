@@ -1,0 +1,207 @@
+from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
+from django.db import migrations, models
+import django.db.models.deletion
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('academics', '0002_initial'),
+        ('students', '0003_student_staff_parent'),
+        ('tenants', '0001_initial'),
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+    ]
+
+    operations = [
+        migrations.DeleteModel(name='Attendance'),
+        migrations.DeleteModel(name='CBCGrade'),
+        migrations.DeleteModel(name='Class'),
+        migrations.DeleteModel(name='Subject'),
+        migrations.CreateModel(
+            name='Subject',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('name', models.CharField(max_length=100)),
+                ('code', models.CharField(max_length=10)),
+                ('description', models.TextField(blank=True)),
+                ('grade_levels', models.JSONField(default=list)),
+                ('is_preloaded', models.BooleanField(default=False)),
+                ('is_active', models.BooleanField(default=True)),
+                ('order', models.PositiveIntegerField(default=0)),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={
+                'ordering': ['order', 'name'],
+                'unique_together': {('tenant', 'code')},
+            },
+        ),
+        migrations.CreateModel(
+            name='Strand',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('name', models.CharField(max_length=200)),
+                ('order', models.PositiveIntegerField(default=0)),
+                ('subject', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='strands', to='academics.subject')),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={
+                'ordering': ['order', 'name'],
+                'unique_together': {('subject', 'name')},
+            },
+        ),
+        migrations.CreateModel(
+            name='SubStrand',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('name', models.CharField(max_length=200)),
+                ('order', models.PositiveIntegerField(default=0)),
+                ('strand', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='sub_strands', to='academics.strand')),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={
+                'ordering': ['order', 'name'],
+                'unique_together': {('strand', 'name')},
+            },
+        ),
+        migrations.CreateModel(
+            name='LearningOutcome',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('description', models.TextField()),
+                ('order', models.PositiveIntegerField(default=0)),
+                ('sub_strand', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='outcomes', to='academics.substrand')),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={'ordering': ['order']},
+        ),
+        migrations.CreateModel(
+            name='CoCurricularActivity',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('name', models.CharField(max_length=100)),
+                ('category', models.CharField(choices=[('sports', 'Sports'), ('arts', 'Arts & Culture'), ('community', 'Community Service'), ('clubs', 'Clubs & Societies'), ('other', 'Other')], max_length=20)),
+                ('is_active', models.BooleanField(default=True)),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={'unique_together': {('tenant', 'name')}},
+        ),
+        migrations.CreateModel(
+            name='ClassSubjectAssignment',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('academic_year', models.PositiveIntegerField()),
+                ('term', models.CharField(choices=[('term1', 'Term 1'), ('term2', 'Term 2'), ('term3', 'Term 3')], max_length=10)),
+                ('classroom', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='subject_assignments', to='students.classroom')),
+                ('subject', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='assignments', to='academics.subject')),
+                ('teacher', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='teaching_assignments', to=settings.AUTH_USER_MODEL)),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={'unique_together': {('tenant', 'classroom', 'subject', 'academic_year', 'term')}},
+        ),
+        migrations.CreateModel(
+            name='CBCGrade',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('term', models.CharField(max_length=10)),
+                ('academic_year', models.PositiveIntegerField()),
+                ('level', models.CharField(choices=[('EE', 'Exceeding Expectation'), ('ME', 'Meeting Expectation'), ('AE', 'Approaching Expectation'), ('BE', 'Below Expectation')], max_length=2)),
+                ('remarks', models.TextField(blank=True)),
+                ('assessed_on', models.DateField(auto_now_add=True)),
+                ('assessed_by', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='grades_given', to=settings.AUTH_USER_MODEL)),
+                ('learning_outcome', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='grades', to='academics.learningoutcome')),
+                ('student', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='cbc_grades', to='students.student')),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={'unique_together': {('tenant', 'student', 'learning_outcome', 'term', 'academic_year')}},
+        ),
+        migrations.CreateModel(
+            name='AttendanceSession',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('date', models.DateField()),
+                ('session_type', models.CharField(choices=[('daily', 'Daily'), ('morning', 'Morning Session'), ('afternoon', 'Afternoon Session'), ('lesson', 'Single Lesson')], default='daily', max_length=15)),
+                ('term', models.CharField(max_length=10)),
+                ('academic_year', models.PositiveIntegerField()),
+                ('notes', models.TextField(blank=True)),
+                ('is_locked', models.BooleanField(default=False)),
+                ('classroom', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='attendance_sessions', to='students.classroom')),
+                ('subject', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='attendance_sessions', to='academics.subject')),
+                ('teacher', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='attendance_sessions', to=settings.AUTH_USER_MODEL)),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={'unique_together': {('tenant', 'classroom', 'date', 'session_type', 'subject')}},
+        ),
+        migrations.CreateModel(
+            name='AttendanceRecord',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('status', models.CharField(choices=[('P', 'Present'), ('A', 'Absent'), ('L', 'Late'), ('E', 'Excused Absence')], default='P', max_length=1)),
+                ('remarks', models.CharField(blank=True, max_length=200)),
+                ('session', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='records', to='academics.attendancesession')),
+                ('student', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='attendance_records', to='students.student')),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={'unique_together': {('tenant', 'session', 'student')}},
+        ),
+        migrations.CreateModel(
+            name='ClassTimetable',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('term', models.CharField(max_length=10)),
+                ('academic_year', models.PositiveIntegerField()),
+                ('file', models.FileField(upload_to='timetables/')),
+                ('uploaded_at', models.DateTimeField(auto_now_add=True)),
+                ('notes', models.TextField(blank=True)),
+                ('classroom', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='timetables', to='students.classroom')),
+                ('uploaded_by', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='uploaded_timetables', to=settings.AUTH_USER_MODEL)),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={'unique_together': {('tenant', 'classroom', 'term', 'academic_year')}},
+        ),
+        migrations.CreateModel(
+            name='StudentCoCurricular',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('term', models.CharField(max_length=10)),
+                ('academic_year', models.PositiveIntegerField()),
+                ('rating', models.CharField(choices=[('excellent', 'Excellent'), ('good', 'Good'), ('satisfactory', 'Satisfactory'), ('needs_improvement', 'Needs Improvement')], max_length=20)),
+                ('remarks', models.CharField(blank=True, max_length=200)),
+                ('activity', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='student_records', to='academics.cocurricularactivity')),
+                ('student', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='co_curricular', to='students.student')),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={'unique_together': {('tenant', 'student', 'activity', 'term', 'academic_year')}},
+        ),
+        migrations.CreateModel(
+            name='ReportCard',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('term', models.CharField(blank=True, max_length=10)),
+                ('academic_year', models.PositiveIntegerField()),
+                ('report_type', models.CharField(choices=[('termly', 'Termly'), ('annual', 'Annual Summary')], default='termly', max_length=10)),
+                ('days_school_open', models.PositiveIntegerField(default=0)),
+                ('days_present', models.PositiveIntegerField(default=0)),
+                ('days_absent', models.PositiveIntegerField(default=0)),
+                ('days_late', models.PositiveIntegerField(default=0)),
+                ('conduct_discipline', models.IntegerField(default=3, validators=[MinValueValidator(1), MaxValueValidator(4)])),
+                ('conduct_respect', models.IntegerField(default=3, validators=[MinValueValidator(1), MaxValueValidator(4)])),
+                ('conduct_responsibility', models.IntegerField(default=3, validators=[MinValueValidator(1), MaxValueValidator(4)])),
+                ('conduct_punctuality', models.IntegerField(default=3, validators=[MinValueValidator(1), MaxValueValidator(4)])),
+                ('conduct_participation', models.IntegerField(default=3, validators=[MinValueValidator(1), MaxValueValidator(4)])),
+                ('class_teacher_remarks', models.TextField(blank=True)),
+                ('principal_remarks', models.TextField(blank=True)),
+                ('closing_date', models.DateField(blank=True, null=True)),
+                ('next_term_opening_date', models.DateField(blank=True, null=True)),
+                ('status', models.CharField(choices=[('draft', 'Draft'), ('published', 'Published')], default='draft', max_length=15)),
+                ('generated_at', models.DateTimeField(auto_now_add=True)),
+                ('published_at', models.DateTimeField(blank=True, null=True)),
+                ('pdf_file', models.FileField(blank=True, null=True, upload_to='report_cards/')),
+                ('classroom', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='report_cards', to='students.classroom')),
+                ('generated_by', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='generated_report_cards', to=settings.AUTH_USER_MODEL)),
+                ('student', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='report_cards', to='students.student')),
+                ('tenant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='tenants.tenant')),
+            ],
+            options={'unique_together': {('tenant', 'student', 'term', 'academic_year', 'report_type')}},
+        ),
+    ]
