@@ -144,16 +144,6 @@ export default function StudentWaiverPage() {
                         <span className="font-medium">Approved By:</span> {waiver.approved_by_name}
                       </p>
                     )}
-                    {waiver.supporting_document && (
-                      <a
-                        href={waiver.supporting_document}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 text-xs text-blue-600 hover:text-blue-900 mt-2"
-                      >
-                        View Supporting Document
-                      </a>
-                    )}
                   </div>
                 </div>
               </div>

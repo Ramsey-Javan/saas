@@ -80,6 +80,7 @@ class ClassroomStudentsView(generics.ListAPIView):
     """
     serializer_class = StudentListSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = None
 
     def get_queryset(self):
         qs = Student.objects.filter(

@@ -6,6 +6,58 @@ from django.db.models.functions import Coalesce
 from .models import CONFIRMED_PAYMENT_STATUSES, Payment, StudentFee, StudentWaiver, WaiverPolicy
 
 
+TERM_ORDER = {
+    'term1': 1,
+    'term2': 2,
+    'term3': 3,
+    'annual': 4,
+}
+
+
+def _previous_term_and_year(current_term, current_year):
+    if current_term == 'term1':
+        return 'term3', current_year - 1
+    if current_term == 'term2':
+        return 'term1', current_year
+    if current_term == 'term3':
+        return 'term2', current_year
+    if current_term == 'annual':
+        return 'annual', current_year - 1
+    return None, None
+
+
+def _term_within_bounds(current_term, current_year, waiver):
+    if current_term not in TERM_ORDER:
+        return False
+    if waiver.valid_from_year is None:
+        return False
+
+    # Annual invoices only match annual waivers in the same year range.
+    if current_term == 'annual':
+        if waiver.valid_from_term != 'annual':
+            return False
+        if waiver.valid_until_year is None:
+            return current_year >= waiver.valid_from_year
+        if waiver.valid_until_term and waiver.valid_until_term != 'annual':
+            return False
+        return waiver.valid_from_year <= current_year <= waiver.valid_until_year
+
+    if waiver.valid_from_term == 'annual':
+        return False
+    if waiver.valid_until_term == 'annual':
+        return False
+
+    start_key = (waiver.valid_from_year, TERM_ORDER.get(waiver.valid_from_term))
+    current_key = (current_year, TERM_ORDER.get(current_term))
+
+    if waiver.valid_until_year is None:
+        return current_key >= start_key
+
+    end_term = waiver.valid_until_term or waiver.valid_from_term
+    end_key = (waiver.valid_until_year, TERM_ORDER.get(end_term))
+    return start_key <= current_key <= end_key
+
+
 def _amount_due(invoice):
     raw_due = invoice.expected_amount + invoice.carried_forward + invoice.penalty_amount - invoice.waived_amount
     return max(Decimal('0.00'), raw_due)
@@ -57,6 +109,8 @@ def apply_waiver_to_invoices(waiver):
         )
 
     for invoice in invoices:
+        if not _term_within_bounds(invoice.fee_structure.term, invoice.fee_structure.academic_year, waiver):
+            continue
         policy = waiver.policy
         if policy.discount_type == 'percentage':
             waived = invoice.expected_amount * (policy.discount_value / Decimal('100'))
@@ -138,12 +192,16 @@ def remove_waiver_from_invoices(waiver):
 def get_carry_forward(student, current_term, current_year):
     from decimal import Decimal
 
+    previous_term, previous_year = _previous_term_and_year(current_term, current_year)
+    if not previous_term or previous_year is None:
+        return Decimal('0.00')
+
     previous = StudentFee.objects.filter(
-        student=student
-    ).exclude(
-        fee_structure__term=current_term,
-        fee_structure__academic_year=current_year
-    ).select_related('fee_structure').order_by('-fee_structure__academic_year', '-fee_structure__term').first()
+        student=student,
+        tenant=getattr(student, 'tenant', None),
+        fee_structure__term=previous_term,
+        fee_structure__academic_year=previous_year,
+    ).select_related('fee_structure').first()
 
     if not previous:
         return Decimal('0.00')
@@ -164,13 +222,18 @@ def get_carry_forward(student, current_term, current_year):
 
 def calculate_waived_amount(student, base_amount, term, year):
     """Calculate waived amount based on student's active waiver policy."""
-    waiver = StudentWaiver.objects.filter(
-        student=student,
-        is_active=True,
-        valid_from_year__lte=year,
-    ).filter(
-        Q(valid_until_year__isnull=True) | Q(valid_until_year__gte=year)
-    ).select_related('policy').first()
+    waivers = (
+        StudentWaiver.objects.filter(
+            student=student,
+            is_active=True,
+            valid_from_year__lte=year,
+        )
+        .filter(Q(valid_until_year__isnull=True) | Q(valid_until_year__gte=year))
+        .select_related('policy')
+        .order_by('-valid_from_year', '-valid_from_term')
+    )
+
+    waiver = next((item for item in waivers if _term_within_bounds(term, year, item)), None)
 
     if not waiver:
         return Decimal('0.00'), None

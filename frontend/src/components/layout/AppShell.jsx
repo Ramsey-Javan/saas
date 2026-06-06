@@ -3,7 +3,8 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   GraduationCap, Users, DollarSign, BookOpen,
   MessageSquare, LayoutDashboard, LogOut,
-  Menu, X, ChevronRight, Settings, AlertCircle, FilePlus,
+  Menu, ChevronRight, Settings, AlertCircle, FilePlus,
+  CheckSquare, FileText, Calendar, ClipboardList, Award,
 } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { cn } from '@/lib/utils'
@@ -17,7 +18,9 @@ const NAV_ITEMS = {
     { label: 'Finance', icon: DollarSign, href: '/finance' },
     { label: 'Pending Cheques', icon: AlertCircle, href: '/finance/cheques', badgeKey: 'pendingCheques' },
     { label: 'Waivers Dashboard', icon: FilePlus, href: '/finance/waivers-dashboard' },
-    { label: 'Academics', icon: BookOpen, href: '/academics' },
+    { label: 'Academics', icon: GraduationCap, href: '/academics' },
+    { label: 'Exams', icon: ClipboardList, href: '/academics/exams' },
+    { label: 'National Exams', icon: Award, href: '/academics/national-exams' },
     { label: 'Communication', icon: MessageSquare, href: '/communication' },
     { label: 'Settings', icon: Settings, href: '/settings' },
   ],
@@ -29,8 +32,11 @@ const NAV_ITEMS = {
     { label: 'Dashboard', icon: LayoutDashboard, href: '/teacher' },
     { label: 'Students', icon: Users, href: '/students' },
     { label: 'My Classes', icon: Users, href: '/teacher/classes' },
-    { label: 'Attendance', icon: BookOpen, href: '/teacher/attendance' },
-    { label: 'Grades', icon: BookOpen, href: '/teacher/grades' },
+    { label: 'Grades', icon: BookOpen, href: '/academics/grades' },
+    { label: 'Exams', icon: ClipboardList, href: '/academics/exams' },
+    { label: 'Attendance', icon: CheckSquare, href: '/academics/attendance' },
+    { label: 'Report Cards', icon: FileText, href: '/academics/report-cards' },
+    { label: 'Timetable', icon: Calendar, href: '/academics/timetable' },
   ],
   bursar: [
     { label: 'Finance', icon: LayoutDashboard, href: '/finance' },

@@ -24,6 +24,10 @@ class Command(BaseCommand):
         tenant_name = options['tenant_name']
         tenant_domain = options['tenant_domain']
 
+        # =======================================
+        # CREATE TENANT 
+        # =======================================
+
         tenant, tenant_created = Tenant.objects.get_or_create(
             name=tenant_name,
             defaults={
@@ -47,6 +51,9 @@ class Command(BaseCommand):
             tenant.domain = tenant_domain
             tenant.save(update_fields=['domain'])
 
+        # ====================================
+        # CREATE DOMAIN
+        # ====================================
         Domain.objects.get_or_create(
             tenant=tenant,
             defaults={
@@ -55,6 +62,11 @@ class Command(BaseCommand):
                 'verified': True,
             },
         )
+
+
+        # ====================================
+        # CREATE ADMIN USER
+        # ====================================
 
         user, user_created = CustomUser.objects.get_or_create(
             email=email,
@@ -95,7 +107,50 @@ class Command(BaseCommand):
         if password:
             user.set_password(password)
             user.save(update_fields=['password'])
+        
 
+        # ====================================
+        # CREATE TEACHERS
+        # ====================================
+        teachers_data = [
+            {
+                'email': 'john.teacher@demo.co.ke',
+                'first_name': 'john',
+                'last_name': 'Mwangi'
+            },
+                        {
+                'email': 'mary.teacher@demo.co.ke',
+                'first_name': 'Mary',
+                'last_name': 'Atieno'
+            },
+                        {
+                'email': 'kevin.teacher@demo.co.ke',
+                'first_name': 'Kevin',
+                'last_name': 'Bosire'
+            },
+        ]
+
+        for teacher_data in teachers_data:
+            teacher, created = CustomUser.objects.get_or_create(
+                email=teacher_data['email'],
+                defaults={
+                    'username': teacher_data['email'],
+                    'first_name': teacher_data['first_name'],
+                    'last_name': teacher_data['last_name'],
+                    'role': 'teacher',
+                    'tenant': tenant,
+                    'is_staff': True,
+                },
+            )
+
+            teacher.set_password('teacher123')
+            teacher.save(update_fields=['password'])
+
+            self.stdout.write(self.style.SUCCESS(f"Teacher created: {teacher.get_full_name()}"))
+
+        # ====================================
+        # CREATE CLASSROOM
+        # ====================================
         classroom, _ = Classroom.objects.get_or_create(
             tenant=tenant,
             name='Grade 5',
@@ -107,7 +162,9 @@ class Command(BaseCommand):
                 'is_active': True,
             },
         )
-
+        # ====================================
+        # CREATE GUARDIAN
+        # ====================================
         guardian, _ = Guardian.objects.get_or_create(
             phone='0712345678',
             defaults={
@@ -119,6 +176,9 @@ class Command(BaseCommand):
             },
         )
 
+        # ====================================
+        # CREATE STUDENT 
+        # ====================================
         student, _ = Student.objects.get_or_create(
             admission_number='ADM/2026/001',
             defaults={
@@ -134,6 +194,9 @@ class Command(BaseCommand):
             },
         )
 
+        # ====================================
+        # FINAL OUTPUT
+        # ====================================
         self.stdout.write(self.style.SUCCESS('Demo setup complete.'))
         self.stdout.write(f'Email: {email}')
         self.stdout.write(f'Password: {password}')
