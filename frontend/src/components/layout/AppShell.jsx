@@ -9,6 +9,7 @@ import {
 import { useAuthStore } from '@/store/authStore'
 import { cn } from '@/lib/utils'
 import { financeApi } from '@/api/finance'
+import NotificationBell from '@/components/layout/NotificationBell'
 
 // Navigation items per role
 const NAV_ITEMS = {
@@ -37,6 +38,7 @@ const NAV_ITEMS = {
     { label: 'Attendance', icon: CheckSquare, href: '/academics/attendance' },
     { label: 'Report Cards', icon: FileText, href: '/academics/report-cards' },
     { label: 'Timetable', icon: Calendar, href: '/academics/timetable' },
+    { label: 'Messages', icon: MessageSquare, href: '/communication' },
   ],
   bursar: [
     { label: 'Finance', icon: LayoutDashboard, href: '/finance' },
@@ -190,7 +192,12 @@ export default function AppShell({ children }) {
             <Menu size={20} />
           </button>
           <span className="font-bold text-sm text-gray-900">{schoolName}</span>
-          <div className="w-8" />
+          <NotificationBell />
+        </header>
+
+        {/* Desktop header */}
+        <header className="hidden lg:flex items-center justify-end px-6 py-3 bg-white border-b border-gray-100">
+          <NotificationBell />
         </header>
 
         {/* Page content */}

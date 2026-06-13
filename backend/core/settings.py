@@ -3,6 +3,7 @@ Django settings for SaaS project.
 """
 import os
 from pathlib import Path
+from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -33,7 +34,7 @@ INSTALLED_APPS = [
     'students',
     'finance',
     'academics.apps.AcademicsConfig',
-    'communication',
+    'communication.apps.CommunicationConfig',
 ]
 
 MIDDLEWARE = [
@@ -111,6 +112,20 @@ CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:
 CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULE = {
+    'daily-fee-reminders': {
+        'task': 'communication.tasks.send_fee_reminders_task',
+        'schedule': crontab(hour=8, minute=0),
+    },
+    'process-scheduled-announcements': {
+        'task': 'communication.tasks.process_scheduled_task',
+        'schedule': crontab(minute='*/5'),
+    },
+    'process-recurring-announcements': {
+        'task': 'communication.tasks.process_recurring_task',
+        'schedule': crontab(minute=0),
+    },
+}
 
 MPESA = {
     'CONSUMER_KEY': os.environ.get('MPESA_CONSUMER_KEY', ''),
@@ -126,6 +141,20 @@ AFRICA_TALKING = {
     'USERNAME': os.environ.get('AT_USERNAME', 'sandbox'),
     'SENDER_ID': os.environ.get('AT_SENDER_ID', ''),
 }
+
+TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
+TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
+TWILIO_WHATSAPP_FROM = os.environ.get('TWILIO_WHATSAPP_FROM', 'whatsapp:+14155238886')
+VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
+VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
+VAPID_CLAIMS_EMAIL = os.environ.get('VAPID_CLAIMS_EMAIL', 'admin@yourapp.co.ke')
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@yourapp.co.ke')
 
 TENANT_APPS = [
     'accounts',
