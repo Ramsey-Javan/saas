@@ -31,6 +31,14 @@ import ExamMarksSheetPage from '@/pages/academics/ExamMarksSheetPage'
 import ExamResultsPage from '@/pages/academics/ExamResultsPage'
 import NationalExamsDashboard from '@/pages/academics/NationalExamsDashboard'
 import NationalExamDetailPage from '@/pages/academics/NationalExamDetailPage'
+import {
+  CommunicationDashboard,
+  ComposeMessagePage,
+  TemplatesPage,
+  ScheduledMessagesPage,
+  MessageLogsPage,
+  NotificationsPage,
+} from '@/pages/communication'
 import AppShell from '@/components/layout/AppShell'
 import  LoginPage  from '@/pages/auth/LoginPage'  
 import './App.css'
@@ -93,6 +101,12 @@ export default function App() {
         <Route path="/students/:id/id-card" element={<ProtectedShell allowedRoles={['admin','bursar']}><StudentIdCardPage /></ProtectedShell>} />
         <Route path="/students/:id" element={<ProtectedShell allowedRoles={['admin','bursar','teacher','parent']}><StudentDetailPage /></ProtectedShell>} />
         <Route path="/students/:id/edit" element={<ProtectedShell allowedRoles={['admin','bursar']}><AdmitStudentPage /></ProtectedShell>} />
+        <Route path="/communication" element={<ProtectedShell allowedRoles={['admin','superadmin','teacher']}><CommunicationDashboard /></ProtectedShell>} />
+        <Route path="/communication/compose" element={<ProtectedShell allowedRoles={['admin','superadmin','teacher']}><ComposeMessagePage /></ProtectedShell>} />
+        <Route path="/communication/templates" element={<ProtectedShell allowedRoles={['admin','superadmin']}><TemplatesPage /></ProtectedShell>} />
+        <Route path="/communication/scheduled" element={<ProtectedShell allowedRoles={['admin','superadmin','teacher']}><ScheduledMessagesPage /></ProtectedShell>} />
+        <Route path="/communication/logs" element={<ProtectedShell allowedRoles={['admin','superadmin','teacher']}><MessageLogsPage /></ProtectedShell>} />
+        <Route path="/communication/notifications" element={<ProtectedShell allowedRoles={['admin','superadmin','teacher','bursar','parent']}><NotificationsPage /></ProtectedShell>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

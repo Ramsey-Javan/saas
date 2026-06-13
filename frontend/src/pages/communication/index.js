@@ -1,1 +1,6 @@
-// Communication pages placeholder
+export { default as CommunicationDashboard } from './CommunicationDashboard'
+export { default as ComposeMessagePage } from './ComposeMessagePage'
+export { default as TemplatesPage } from './TemplatesPage'
+export { default as ScheduledMessagesPage } from './ScheduledMessagesPage'
+export { default as MessageLogsPage } from './MessageLogsPage'
+export { default as NotificationsPage } from './NotificationsPage'

@@ -370,6 +370,7 @@ class CBCGradeViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         with transaction.atomic():
             for entry in data['grades']:
                 student_id = entry.get('student_id')
+                
                 level = entry.get('level')
                 remarks = entry.get('remarks', '')
 
