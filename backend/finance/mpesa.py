@@ -140,21 +140,51 @@ class MpesaService:
                         fee.paid_amount = fee.paid_amount + payment.amount
                         self._update_fee_status(fee)
 
+                        from .utils import recalculate_student_fees
+                        recalculate_student_fees(fee.student)
+
                     receipt = self._create_receipt(payment)
                     return {"status": "success", "receipt": receipt.receipt_number}
 
-                payment.status = "expired" if result_code in {1032, 1037} else "failed"
-                payment.notes = result_desc
+                # === DISTINCT FAILURE HANDLING ===
+                # 1032 = User cancelled on phone
+                # 1037 = System timeout (user didn't respond)
+                # 1    = Insufficient funds
+                # 2006 = Wrong PIN
+                # Others = Generic failure
+                if result_code == 1032:
+                    payment.status = "cancelled"
+                    payment.notes = "Transaction cancelled by user on phone."
+                elif result_code == 1037:
+                    payment.status = "expired"
+                    payment.notes = "STK push timed out. User did not respond."
+                elif result_code == 1:
+                    payment.status = "failed"
+                    payment.notes = "Insufficient funds or M-Pesa account issue."
+                elif result_code == 2006:
+                    payment.status = "failed"
+                    payment.notes = "Wrong M-Pesa PIN entered."
+                else:
+                    payment.status = "failed"
+                    payment.notes = result_desc or "Payment failed."
+
                 payment.save(update_fields=["status", "notes"])
-                return {"status": payment.status, "reason": result_desc}
+                return {
+                    "status": payment.status,
+                    "reason": payment.notes,
+                    "result_code": result_code,
+                }
         except Exception as e:
             return {"status": "error", "reason": str(e)}
 
     def expire_stale_payment(self, payment):
-        cutoff = timezone.now() - timezone.timedelta(minutes=5)
+        """Mark payment as expired if it's been pending too long with no callback."""
+        # Daraja STK push typically times out after ~75 seconds
+        # We give a 90-second grace period before marking as expired
+        cutoff = timezone.now() - timezone.timedelta(seconds=90)
         if payment.status == "pending" and payment.created_at <= cutoff:
             payment.status = "expired"
-            payment.notes = "STK push expired before confirmation."
+            payment.notes = "STK push timed out. No response from user."
             payment.save(update_fields=["status", "notes"])
         return payment
 

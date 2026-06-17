@@ -32,7 +32,6 @@ def _term_within_bounds(current_term, current_year, waiver):
     if waiver.valid_from_year is None:
         return False
 
-    # Annual invoices only match annual waivers in the same year range.
     if current_term == 'annual':
         if waiver.valid_from_term != 'annual':
             return False
@@ -58,39 +57,32 @@ def _term_within_bounds(current_term, current_year, waiver):
     return start_key <= current_key <= end_key
 
 
-def _amount_due(invoice):
-    raw_due = invoice.expected_amount + invoice.carried_forward + invoice.penalty_amount - invoice.waived_amount
-    return max(Decimal('0.00'), raw_due)
+def _invoice_base_due(invoice):
+    """
+    The base obligation for a single term's invoice:
+      expected_amount + carried_forward (snapshot from generation) + penalty - waived
+
+    carried_forward here is the ORIGINAL arrears baked in at invoice-generation time.
+    It is a snapshot and must NOT be re-written by recalculate_student_fees().
+    """
+    return max(
+        Decimal('0.00'),
+        invoice.expected_amount
+        + invoice.carried_forward
+        + invoice.penalty_amount
+        - invoice.waived_amount,
+    )
 
 
 def confirm_payment(payment):
+    """Confirm a single payment and cascade recalculation to all invoices."""
     invoice = payment.student_fee
     if not invoice:
         return Decimal('0.00')
 
-    money_zero = Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2))
-    total_paid = (
-        Payment.objects.filter(student_fee=invoice, status__in=CONFIRMED_PAYMENT_STATUSES)
-        .aggregate(total=Coalesce(Sum('amount'), money_zero))
-        .get('total')
-        or Decimal('0.00')
-    )
+    recalculate_student_fees(invoice.student)
 
-    amount_due = _amount_due(invoice)
-    amount_paid = min(total_paid, amount_due)
-
-    # effective balance and credit using the canonical formulas
-    invoice.paid_amount = amount_paid
-    invoice.credit = max(Decimal('0.00'), total_paid - (amount_due))
-
-    if invoice.paid_amount >= amount_due:
-        invoice.status = 'paid'
-    elif invoice.paid_amount > 0:
-        invoice.status = 'partial'
-    else:
-        invoice.status = 'unpaid'
-
-    invoice.save(update_fields=['paid_amount', 'credit', 'status', 'updated_at'])
+    invoice.refresh_from_db()
     return invoice.credit
 
 
@@ -121,77 +113,48 @@ def apply_waiver_to_invoices(waiver):
         invoice.waived_amount = waived
         invoice.waiver = waiver
         invoice.waiver_reason = policy.get_category_display()
+        invoice.save(update_fields=['waived_amount', 'waiver', 'waiver_reason'])
 
-        # Recalculate status
-        net_due = invoice.expected_amount - waived + invoice.carried_forward + invoice.penalty_amount
-        net_due = max(Decimal('0.00'), net_due)
-
-        total_paid = (
-            Payment.objects.filter(student_fee=invoice, status__in=CONFIRMED_PAYMENT_STATUSES)
-            .aggregate(total=Coalesce(Sum('amount'), Value(Decimal('0.00'))))
-            .get('total')
-            or Decimal('0.00')
-        )
-
-        if total_paid >= net_due:
-            invoice.status = 'paid'
-            invoice.credit = max(
-                Decimal('0.00'),
-                total_paid - net_due
-            )
-            invoice.paid_amount = min(total_paid, net_due)
-        elif total_paid > 0:
-            invoice.status = 'partial'
-            invoice.credit = Decimal('0.00')
-            invoice.paid_amount = min(total_paid, net_due)
-        else:
-            invoice.status = 'unpaid'
-            invoice.credit = Decimal('0.00')
-            invoice.paid_amount = Decimal('0.00')
-
-        invoice.save()
+    # Cascade recalculation after waiver change
+    recalculate_student_fees(waiver.student)
 
 
 def remove_waiver_from_invoices(waiver):
-    from decimal import Decimal
     invoices = StudentFee.objects.filter(waiver=waiver)
-
     for invoice in invoices:
         invoice.waived_amount = Decimal('0.00')
         invoice.waiver = None
         invoice.waiver_reason = ''
-        invoice.credit = Decimal('0.00')
+        invoice.save(update_fields=['waived_amount', 'waiver', 'waiver_reason'])
 
-        # Recalculate status without waiver
-        total_paid = (
-            Payment.objects.filter(student_fee=invoice, status__in=CONFIRMED_PAYMENT_STATUSES)
-            .aggregate(total=Coalesce(Sum('amount'), Value(Decimal('0.00'))))
-            .get('total')
-            or Decimal('0.00')
-        )
+    recalculate_student_fees(waiver.student)
 
-        amount_due = max(
-            Decimal('0.00'),
-            invoice.expected_amount + invoice.carried_forward + invoice.penalty_amount
-        )
 
-        if total_paid >= amount_due:
-            invoice.status = 'paid'
-            invoice.credit = max(Decimal('0.00'), total_paid - amount_due)
-            invoice.paid_amount = min(total_paid, amount_due)
-        elif total_paid > 0:
-            invoice.status = 'partial'
-            invoice.paid_amount = min(total_paid, amount_due)
-        else:
-            invoice.status = 'unpaid'
-            invoice.paid_amount = Decimal('0.00')
+def _invoice_net_balance(invoice):
+    """
+    True net balance for carry-forward purposes:
+      positive = arrears still owed
+      negative = credit to carry forward
 
-        invoice.save()
+    Uses the stored carried_forward snapshot (not re-derived) so the
+    carry-forward chain doesn't compound across generations.
+    """
+    total_due = _invoice_base_due(invoice)
+    total_paid = (
+        Payment.objects.filter(student_fee=invoice, status__in=CONFIRMED_PAYMENT_STATUSES)
+        .aggregate(total=Coalesce(Sum('amount'), Value(Decimal('0.00'))))
+        .get('total')
+        or Decimal('0.00')
+    )
+    return total_due - total_paid  # positive = still owed, negative = credit
 
 
 def get_carry_forward(student, current_term, current_year):
-    from decimal import Decimal
-
+    """
+    Net balance from the immediately previous term.
+    Positive = arrears; negative = credit.
+    Called ONLY at invoice-generation time to snapshot the CF for a new invoice.
+    """
     previous_term, previous_year = _previous_term_and_year(current_term, current_year)
     if not previous_term or previous_year is None:
         return Decimal('0.00')
@@ -206,18 +169,84 @@ def get_carry_forward(student, current_term, current_year):
     if not previous:
         return Decimal('0.00')
 
-    # Net due = what they actually owed after waiver
-    net_due = max(
-        Decimal('0.00'),
-        previous.expected_amount + previous.carried_forward + previous.penalty_amount - previous.waived_amount
+    return _invoice_net_balance(previous)
+
+
+def recalculate_student_fees(student):
+    """
+    Recalculate paid_amount, credit, and status for ALL of a student's invoices
+    in chronological order, flowing surplus credit forward.
+
+    KEY INVARIANT: carried_forward is a snapshot set at invoice-generation time
+    and is NEVER modified here. It represents "what was owed from the previous
+    term when this invoice was created". The recalculation below only touches
+    paid_amount, credit, and status.
+
+    Credit flow:
+      - Each term has a base_due = expected + carried_forward(snapshot) + penalty - waived
+      - Payments recorded against THIS invoice plus any credit cascaded from earlier
+        terms are applied to base_due.
+      - If total available > base_due the surplus becomes cumulative_credit for
+        the next invoice.
+      - If total available < base_due the invoice is partial/unpaid and
+        cumulative_credit resets to 0 (the deficit is not cascaded — it was
+        already snapshotted in the next invoice's carried_forward at generation time).
+    """
+    invoices = (
+        StudentFee.objects.filter(student=student, tenant=student.tenant)
+        .select_related('fee_structure')
+        .order_by('fee_structure__academic_year', 'fee_structure__term')
     )
-    
-    # Carry forward = net_due minus what they paid
-    # Positive = arrears (add to next invoice)
-    # Negative = credit (deduct from next invoice)
-    carry_forward = net_due - previous.paid_amount
-    
-    return carry_forward
+
+    term_order = {'term1': 1, 'term2': 2, 'term3': 3, 'annual': 4}
+    invoices = sorted(
+        invoices,
+        key=lambda inv: (
+            inv.fee_structure.academic_year,
+            term_order.get(inv.fee_structure.term, 99),
+        ),
+    )
+
+    cumulative_credit = Decimal('0.00')
+
+    for invoice in invoices:
+        # Base obligation for this term (uses snapshot carried_forward — not re-derived)
+        base_due = _invoice_base_due(invoice)
+
+        # Payments actually recorded against this specific invoice
+        term_payments = (
+            Payment.objects.filter(student_fee=invoice, status__in=CONFIRMED_PAYMENT_STATUSES)
+            .aggregate(total=Coalesce(Sum('amount'), Value(Decimal('0.00'))))
+            .get('total')
+            or Decimal('0.00')
+        )
+
+        # Total available = own payments + credit cascaded from earlier terms
+        available = term_payments + cumulative_credit
+
+        if base_due == Decimal('0.00'):
+            # Fully waived or zero-fee term: pass all credit through unchanged
+            invoice.paid_amount = Decimal('0.00')
+            invoice.credit = available
+            invoice.status = 'paid'
+            cumulative_credit = available
+        elif available >= base_due:
+            invoice.paid_amount = base_due
+            invoice.credit = available - base_due
+            invoice.status = 'paid'
+            cumulative_credit = invoice.credit
+        elif available > Decimal('0.00'):
+            invoice.paid_amount = available
+            invoice.credit = Decimal('0.00')
+            invoice.status = 'partial'
+            cumulative_credit = Decimal('0.00')
+        else:
+            invoice.paid_amount = Decimal('0.00')
+            invoice.credit = Decimal('0.00')
+            invoice.status = 'unpaid'
+            cumulative_credit = Decimal('0.00')
+
+        invoice.save(update_fields=['paid_amount', 'credit', 'status', 'updated_at'])
 
 
 def calculate_waived_amount(student, base_amount, term, year):
@@ -243,7 +272,7 @@ def calculate_waived_amount(student, base_amount, term, year):
         waived = base_amount * (policy.discount_value / Decimal('100'))
     else:
         waived = min(policy.discount_value, base_amount)
-    
+
     return waived.quantize(Decimal('0.01')), waiver
 
 
@@ -251,7 +280,7 @@ def get_sibling_discount(student):
     """Check if student qualifies for sibling discount."""
     if not student.primary_guardian:
         return None
-    
+
     siblings = (
         student.__class__.objects.filter(
             primary_guardian=student.primary_guardian,
@@ -262,8 +291,7 @@ def get_sibling_discount(student):
     )
     if siblings == 0:
         return None
-    
+
     return WaiverPolicy.objects.filter(
         category='sibling', is_active=True, tenant=student.tenant
     ).first()
-

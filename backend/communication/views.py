@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from academics.permissions import IsAdminUser, IsTeacherOrAdmin
-from academics.views import TenantScopedMixin
+from academics.views.mixins import TenantScopedMixin
 from academics.models import ClassSubjectAssignment
 
 from .models import Announcement, InAppNotification, MessageLog, MessageTemplate, Notification, PushSubscription, SMSLog
