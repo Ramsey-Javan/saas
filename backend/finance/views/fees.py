@@ -14,7 +14,7 @@ from rest_framework.response import Response
 
 from students.models import Classroom, Student
 
-from ..models import FeeStructure, StudentFee, Payment
+from ..models import FeeStructure, StudentFee, Payment, CONFIRMED_PAYMENT_STATUSES
 from ..permissions import IsAdminOrBursar
 from ..serializers import FeeStructureSerializer, StudentFeeSerializer, PaymentSerializer
 from ..utils import (
@@ -118,11 +118,15 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
         except FeeStructure.DoesNotExist:
             return Response({'error': 'Active fee structure not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        if StudentFee.objects.filter(tenant=tenant, fee_structure=structure).exists():
-            return Response(
-                {'error': 'Invoices already generated for this class, term, and academic year.'},
-                status=status.HTTP_409_CONFLICT,
-            )
+        # NOTE: we intentionally do NOT bail out here just because some invoices
+        # already exist for this fee structure. The creation loop below uses
+        # get_or_create() per student, which is already safe to re-run: existing
+        # students' invoices are left untouched, and only students who don't yet
+        # have an invoice for this term (e.g. admitted mid-term, after the class
+        # was first billed) get one created. Blocking re-runs entirely meant a
+        # student added after the initial "Generate Invoices" click could never
+        # be billed through this endpoint -- their balance simply showed as 0
+        # because no StudentFee row existed for them at all.
 
         invoice_due_date = due_date or structure.due_date
         if not invoice_due_date:
@@ -197,9 +201,22 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
                 from ..utils import recalculate_student_fees
                 recalculate_student_fees(student)
 
+        if created_count == 0 and skipped_count > 0:
+            message = (
+                f'No new invoices needed — all {skipped_count} student(s) in this class '
+                f'already have an invoice for this term.'
+            )
+        elif created_count > 0 and skipped_count > 0:
+            message = (
+                f'Backfilled {created_count} new invoice(s) (e.g. for recently admitted students). '
+                f'{skipped_count} student(s) already had one.'
+            )
+        else:
+            message = f'Generated {created_count} invoice(s).'
+
         return Response(
             {
-                'message': f'Bulk generation complete. {created_count} created, {skipped_count} skipped.',
+                'message': message,
                 'created_count': created_count,
                 'skipped_count': skipped_count,
             },
@@ -232,32 +249,56 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(student__classroom_id=classroom_id)
 
         money_zero = Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2))
-        money_field = DecimalField(max_digits=12, decimal_places=2)
-        # CRITICAL: expected_total sums gross_due_expression() (NOT total_due_expression()).
-        # This report groups by classroom and can span every term ever generated for
-        # every student in that class. carried_forward is a cascaded snapshot of a
-        # student's OWN prior-term debt -- summing the CF-inclusive total_due across
-        # a student's multiple terms (or across many students/terms here) counts the
-        # same arrears multiple times. gross_due_expression() (expected + penalty -
-        # waived, no CF) is the only expression safe to Sum() across many invoices.
-        report = (
-            qs.values('student__classroom__id', 'student__classroom__name')
-            .annotate(
-                expected_total=Coalesce(Sum(gross_due_expression()), money_zero),
-                collected_total=Coalesce(
-                    Sum('payments__amount', filter=_confirmed_payment_filter()),
-                    money_zero,
-                ),
+
+        # CRITICAL: expected_total and collected_total are computed via TWO
+        # SEPARATE queries, never combined in one .annotate()/.aggregate() call.
+        #
+        # Sum(gross_due_expression()) is a pure StudentFee-table value (no join
+        # needed). Sum('payments__amount', ...) requires a JOIN to Payment.
+        # Combining both Sums in the SAME query makes Django join Payment once
+        # for the whole query -- and ANY invoice with more than one matching
+        # confirmed payment row gets its (unrelated) gross_due counted once per
+        # matching payment row, silently inflating expected_total. This is the
+        # documented Django "combining multiple aggregations" pitfall:
+        # https://docs.djangoproject.com/en/stable/topics/db/aggregation/#combining-multiple-aggregations
+        #
+        # Fix: compute expected_total per classroom with NO Payment join at all,
+        # and collected_total with a separate Payment-only query, then merge
+        # the two dicts in Python.
+        expected_by_classroom = {
+            row['student__classroom__id']: row
+            for row in (
+                qs.values('student__classroom__id', 'student__classroom__name')
+                .annotate(expected_total=Coalesce(Sum(gross_due_expression()), money_zero))
             )
-            .annotate(
-                outstanding=ExpressionWrapper(
-                    F('expected_total') - F('collected_total'),
-                    output_field=money_field,
-                ),
+        }
+
+        collected_rows = (
+            Payment.objects.filter(
+                student_fee__in=qs,
+                status__in=CONFIRMED_PAYMENT_STATUSES,
             )
-            .order_by('student__classroom__name')
+            .values('student_fee__student__classroom_id')
+            .annotate(collected_total=Coalesce(Sum('amount'), money_zero))
         )
-        return Response(list(report))
+        collected_by_classroom = {
+            row['student_fee__student__classroom_id']: row['collected_total']
+            for row in collected_rows
+        }
+
+        report = []
+        for cid, row in expected_by_classroom.items():
+            expected = row['expected_total']
+            collected = collected_by_classroom.get(cid, Decimal('0.00'))
+            report.append({
+                'student__classroom__id': cid,
+                'student__classroom__name': row['student__classroom__name'],
+                'expected_total': expected,
+                'collected_total': collected,
+                'outstanding': expected - collected,
+            })
+        report.sort(key=lambda r: r['student__classroom__name'] or '')
+        return Response(report)
 
     @action(detail=False, methods=['get'], permission_classes=[IsAdminOrBursar])
     def term_summary(self, request):
@@ -274,16 +315,21 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(fee_structure__academic_year=academic_year)
 
         money_zero = Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2))
-        # See class_report() above for why gross_due_expression() (not
-        # total_due_expression()) is required for any cross-invoice Sum().
+        # expected_total/total_waived are both pure StudentFee-table aggregates
+        # (no join needed) -- safe to combine in one aggregate() call.
         summary = qs.aggregate(
             expected_total=Coalesce(Sum(gross_due_expression()), money_zero),
-            collected_total=Coalesce(
-                Sum('payments__amount', filter=_confirmed_payment_filter()),
-                money_zero,
-            ),
             total_waived=Coalesce(Sum('waived_amount'), money_zero),
         )
+        # collected_total via a SEPARATE query against Payment directly.
+        # See class_report() for why this must never be combined with
+        # expected_total in the same aggregate()/annotate() call (Sum-with-join
+        # fan-out -- any invoice with multiple matching payments would inflate
+        # expected_total too).
+        summary['collected_total'] = Payment.objects.filter(
+            student_fee__in=qs,
+            status__in=CONFIRMED_PAYMENT_STATUSES,
+        ).aggregate(total=Coalesce(Sum('amount'), money_zero))['total']
         summary['outstanding_total'] = summary['expected_total'] - summary['collected_total']
         return Response(summary)
 
@@ -302,20 +348,25 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(fee_structure__academic_year=academic_year)
 
         money_zero = Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2))
-        money_field = DecimalField(max_digits=12, decimal_places=2)
-        # CRITICAL: gross_due_expression() (NOT total_due_expression()) -- this is
-        # the same cross-invoice-sum rule as class_report()/term_summary() above.
-        # This is what was inflating "Total Expected" / "Net Collectible" on the
-        # Bursar Dashboard: summing each student's 3 cascaded per-term total_due
-        # values (18k, 26k, 30k) instead of their 3 independent own-fees (18k, 8k, 4k).
+
+        # expected_total/total_waived are both pure StudentFee-table aggregates
+        # (no join needed) -- safe to combine in one aggregate() call.
         summary = qs.aggregate(
             expected_total=Coalesce(Sum(gross_due_expression()), money_zero),
-            collected_total=Coalesce(
-                Sum('payments__amount', filter=_confirmed_payment_filter()),
-                money_zero,
-            ),
             total_waived=Coalesce(Sum('waived_amount'), money_zero),
         )
+        # collected_total via a SEPARATE query against Payment directly.
+        # CRITICAL: never combine this with expected_total in one aggregate()/
+        # annotate() call -- Sum(gross_due_expression()) needs no join, but
+        # Sum('payments__amount', ...) requires joining Payment; combining both
+        # in a single query makes Django join Payment for the WHOLE query, and
+        # any invoice with more than one matching confirmed payment gets its
+        # (unrelated) gross_due counted once per matching payment row. This is
+        # exactly what inflated "Total Expected" on the Bursar Dashboard.
+        summary['collected_total'] = Payment.objects.filter(
+            student_fee__in=qs,
+            status__in=CONFIRMED_PAYMENT_STATUSES,
+        ).aggregate(total=Coalesce(Sum('amount'), money_zero))['total']
         summary['outstanding_total'] = summary['expected_total'] - summary['collected_total']
 
         paid_qs = qs.annotate(
@@ -334,24 +385,42 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
             status__in=['unpaid', 'partial', 'overdue'],
         ).count()
 
-        class_report = (
-            qs.values('student__classroom__id', 'student__classroom__name')
-            .annotate(
-                expected_total=Coalesce(Sum(gross_due_expression()), money_zero),
-                collected_total=Coalesce(
-                    Sum('payments__amount', filter=_confirmed_payment_filter()),
-                    money_zero,
-                ),
+        # Top Unpaid Classes -- same separate-query pattern as class_report()
+        # above, for the same Sum-with-join fan-out reason.
+        expected_by_classroom = {
+            row['student__classroom__id']: row
+            for row in (
+                qs.values('student__classroom__id', 'student__classroom__name')
+                .annotate(expected_total=Coalesce(Sum(gross_due_expression()), money_zero))
             )
-            .annotate(
-                outstanding=ExpressionWrapper(
-                    F('expected_total') - F('collected_total'),
-                    output_field=money_field,
-                ),
+        }
+        collected_rows = (
+            Payment.objects.filter(
+                student_fee__in=qs,
+                status__in=CONFIRMED_PAYMENT_STATUSES,
             )
-            .filter(outstanding__gt=0)
-            .order_by('-outstanding')[:5]
+            .values('student_fee__student__classroom_id')
+            .annotate(collected_total=Coalesce(Sum('amount'), money_zero))
         )
+        collected_by_classroom = {
+            row['student_fee__student__classroom_id']: row['collected_total']
+            for row in collected_rows
+        }
+        class_report_rows = []
+        for cid, row in expected_by_classroom.items():
+            expected = row['expected_total']
+            collected = collected_by_classroom.get(cid, Decimal('0.00'))
+            outstanding = expected - collected
+            if outstanding > 0:
+                class_report_rows.append({
+                    'student__classroom__id': cid,
+                    'student__classroom__name': row['student__classroom__name'],
+                    'expected_total': expected,
+                    'collected_total': collected,
+                    'outstanding': outstanding,
+                })
+        class_report_rows.sort(key=lambda r: -r['outstanding'])
+        class_report_rows = class_report_rows[:5]
 
         payments_qs = Payment.objects.filter(tenant=getattr(request.user, 'tenant', None))
         if getattr(request.user, 'is_superuser', False) and not getattr(request.user, 'tenant', None):
@@ -367,6 +436,6 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
         return Response({
             **summary,
             'defaulters_count': defaulters_count,
-            'top_classes': list(class_report),
+            'top_classes': class_report_rows,
             'recent_payments': PaymentSerializer(recent_payments, many=True).data,
         })

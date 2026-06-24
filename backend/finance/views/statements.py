@@ -283,6 +283,7 @@ def student_statement_pdf(request, student_id):
                 pdf.setFont('Helvetica', 8)
             x = margin_x
             for value, width in row:
+                pdf.drawString(x, y, str(value))
                 x += width
             y -= 12
         return y
@@ -344,7 +345,7 @@ def student_statement_pdf(request, student_id):
 
     draw_table(
         'Payments',
-        [('Date', 70), ('Amount', 80), ('Method', 60), ('Receipt', 90), ('M-Pesa', 90)],
+        [('Date', 65), ('Amount', 75), ('Method', 55), ('Receipt', 160), ('M-Pesa', 90)],
         payment_rows,
         y - 6,
     )

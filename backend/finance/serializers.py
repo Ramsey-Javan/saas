@@ -3,6 +3,13 @@ from rest_framework import serializers
 from .models import FeeStructure, StudentFee, Payment, Receipt, WaiverPolicy, StudentWaiver
 
 class FeeStructureSerializer(serializers.ModelSerializer):
+    # Fields that determine how much a student owes. Once any invoice has
+    # been generated from this fee structure, these are locked -- editing
+    # them must never retroactively change an already-billed invoice. To
+    # change a fee mid-year, create a NEW FeeStructure for the next term
+    # instead (e.g. "from Term 2, fees increase to X").
+    LOCKED_AFTER_INVOICING = ['base_amount', 'late_penalty_amount', 'late_penalty_days']
+
     def validate(self, attrs):
         request = self.context.get('request')
         tenant = getattr(request.user, 'tenant', None) if request else None
@@ -15,6 +22,27 @@ class FeeStructureSerializer(serializers.ModelSerializer):
             if missing:
                 raise serializers.ValidationError({
                     'detail': f"Missing required fields: {', '.join(missing)}."
+                })
+
+        # LOCK base_amount / late_penalty_amount / late_penalty_days once
+        # invoices have been generated against this fee structure. due_date
+        # and is_active remain freely editable since they don't change what
+        # a student is billed.
+        if self.instance and StudentFee.objects.filter(fee_structure=self.instance).exists():
+            changed_locked_fields = [
+                field for field in self.LOCKED_AFTER_INVOICING
+                if field in attrs and attrs[field] != getattr(self.instance, field)
+            ]
+            if changed_locked_fields:
+                raise serializers.ValidationError({
+                    'detail': (
+                        f"Cannot change {', '.join(changed_locked_fields)} -- this fee "
+                        "structure already has invoices generated against it. Changing the "
+                        "amount now would not update those existing invoices, and would be "
+                        "confusing/inaccurate for already-billed students. Create a new fee "
+                        "structure for the next term instead (e.g. 'From Term 2, fees "
+                        "increase to KES X')."
+                    )
                 })
 
         classroom = attrs.get('classroom') or getattr(self.instance, 'classroom', None)
@@ -199,4 +227,3 @@ class StudentWaiverSerializer(serializers.ModelSerializer):
     def get_invoice_balance(self, obj):
         inv = self._get_active_invoice(obj)
         return str(inv.balance) if inv else '0.00'
-
