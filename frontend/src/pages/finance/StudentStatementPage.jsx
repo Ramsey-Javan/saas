@@ -58,7 +58,9 @@ export default function StudentStatementPage() {
     const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }))
     const link = document.createElement('a')
     link.href = url
-    link.download = 'student_statement.pdf'
+    const safeAdmission = (student?.admission_number || studentId || 'student').replace(/[^a-zA-Z0-9_-]/g, '')
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    link.download = `statement_${safeAdmission}_${timestamp}.pdf`
     link.click()
     window.URL.revokeObjectURL(url)
     setDownloadStatus('')
@@ -187,7 +189,7 @@ export default function StudentStatementPage() {
                 <tr key={inv.id} className="border-b border-gray-50">
                   <td className="py-2 capitalize">{inv.term}</td>
                   <td className="py-2">{inv.academic_year}</td>
-                  <td className="py-2 font-mono">{formatMoney(inv.amount_due)}</td>
+                  <td className="py-2 font-mono">{formatMoney(inv.base_fee)}</td>
                   <td className="py-2">
                     <div className="font-mono text-emerald-600">{formatMoney(inv.waived_amount)}</div>
                     {inv.waiver_scope && (

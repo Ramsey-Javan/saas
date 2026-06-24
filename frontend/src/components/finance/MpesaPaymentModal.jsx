@@ -44,23 +44,34 @@ export default function MpesaPaymentModal({ isOpen, onClose, student, fee, onSuc
         try {
           const statusRes = await financeApi.getPaymentStatus(res.data.payment_id)
           const st = statusRes.data.status
+          
           if (st === 'completed') {
             setResult({ status: 'success', receipt: statusRes.data.receipt_number })
             clearInterval(pollRef.current)
             setPolling(false)
             setTimeout(() => onSuccess?.({ paymentId: res.data.payment_id, receiptNumber: statusRes.data.receipt_number }), 1500)
-          } else if (st === 'failed' || st === 'expired') {
-            setResult({ status: 'failed', message: st === 'expired' ? 'Payment timed out' : 'Payment failed' })
+          } else if (st === 'cancelled') {
+            setResult({ status: 'cancelled', message: statusRes.data.message || 'You cancelled the payment on your phone.' })
+            clearInterval(pollRef.current)
+            setPolling(false)
+          } else if (st === 'expired') {
+            setResult({ status: 'timeout', message: statusRes.data.message || 'Payment timed out. No response from your phone.' })
+            clearInterval(pollRef.current)
+            setPolling(false)
+          } else if (st === 'failed') {
+            setResult({ status: 'failed', message: statusRes.data.message || 'Payment failed. Please try again.' })
             clearInterval(pollRef.current)
             setPolling(false)
           }
+          // pending = keep polling
         } catch (e) {
-          // Ignore poll errors
+          // Ignore poll errors, keep trying
         }
-      if (attempts >= 40) { // 2 minutes
+        
+        if (attempts >= 40) { // 2 minutes max
           clearInterval(pollRef.current)
           setPolling(false)
-          setResult({ status: 'failed', message: 'Payment confirmation timed out' })
+          setResult({ status: 'timeout', message: 'Payment confirmation timed out. Please check your M-Pesa messages and try again if needed.' })
         }
       }, 3000)
     } catch (err) {
@@ -109,10 +120,25 @@ export default function MpesaPaymentModal({ isOpen, onClose, student, fee, onSuc
             )}
           </div>
         </div>
+      ) : result?.status === 'cancelled' ? (
+        <div className="text-center py-6">
+          <AlertCircle size={48} className="text-orange-500 mx-auto mb-3" />
+          <p className="font-bold text-orange-700">{result.message}</p>
+          <p className="text-sm text-gray-500 mt-2">You can try again if this was a mistake.</p>
+          <Button onClick={() => setResult(null)} className="mt-4">Try Again</Button>
+        </div>
+      ) : result?.status === 'timeout' ? (
+        <div className="text-center py-6">
+          <AlertCircle size={48} className="text-amber-500 mx-auto mb-3" />
+          <p className="font-bold text-amber-700">{result.message}</p>
+          <p className="text-sm text-gray-500 mt-2">No response was received from your phone.</p>
+          <Button onClick={() => setResult(null)} className="mt-4">Try Again</Button>
+        </div>
       ) : result?.status === 'failed' ? (
         <div className="text-center py-6">
           <AlertCircle size={48} className="text-red-500 mx-auto mb-3" />
           <p className="font-bold text-red-700">{result.message}</p>
+          <Button onClick={() => setResult(null)} className="mt-4">Try Again</Button>
         </div>
       ) : (
         <div className="space-y-4">
