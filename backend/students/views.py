@@ -1,29 +1,57 @@
+import csv
 from decimal import Decimal
 
-from rest_framework import generics, filters, status
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
 from django.db.models import DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse
-import csv
-from .utils import parse_student_csv, promote_all_students_to_next_grade
-
-from accounts.views import IsSchoolAdmin, IsTeacher
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import filters, generics, status
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from .models import Student, Guardian, Classroom
+from accounts.models import CustomUser
+from accounts.views import IsSchoolAdmin, IsTeacher
 from finance.models import CONFIRMED_PAYMENT_STATUSES, FeeStructure, Payment, StudentFee
 from finance.utils import calculate_waived_amount, get_sibling_discount
+
+from academics.models import ClassSubjectAssignment
+
+from .models import Classroom, Guardian, Student
 from .serializers import (
     ClassroomSerializer,
     GuardianSerializer,
-    StudentListSerializer,
     StudentDetailSerializer,
+    StudentListSerializer,
 )
+from .utils import parse_student_csv, promote_all_students_to_next_grade
+
+PLAN_LIMITS = {
+    'trial': 100,
+    'starter': 400,
+    'growth': 1000,
+    'enterprise': None,
+}
+
+
+def _teacher_accessible_classroom_ids(user):
+    """
+    Classrooms a teacher may see students in: where they are the homeroom
+    (class_teacher) OR where they have a ClassSubjectAssignment. Used to
+    scope the student list/detail views so a teacher doesn't see every
+    student in the school — only students in classes they're actually
+    connected to.
+    """
+    homeroom_ids = set(
+        Classroom.objects.filter(tenant=user.tenant, class_teacher=user).values_list('id', flat=True)
+    )
+    subject_ids = set(
+        ClassSubjectAssignment.objects.filter(tenant=user.tenant, teacher=user).values_list('classroom_id', flat=True)
+    )
+    return homeroom_ids | subject_ids
 
 
 # ─── Classrooms ───────────────────────────────────────────────────────────────
@@ -47,10 +75,13 @@ class ClassroomListCreateView(generics.ListCreateAPIView):
             qs = qs.filter(tenant=self.request.user.tenant)
         year = self.request.query_params.get('year')
         grade = self.request.query_params.get('grade')
+        class_teacher_id = self.request.query_params.get('class_teacher')
         if year:
             qs = qs.filter(academic_year=year)
         if grade:
             qs = qs.filter(grade_level=grade)
+        if class_teacher_id:
+            qs = qs.filter(class_teacher_id=class_teacher_id)
         return qs
 
     def perform_create(self, serializer):
@@ -64,13 +95,33 @@ class ClassroomDetailView(generics.RetrieveUpdateDestroyAPIView):
     DELETE /api/students/classrooms/<id>/
     """
     serializer_class = ClassroomSerializer
-    permission_classes = [IsSchoolAdmin]
+
+    def get_permissions(self):
+        if self.request.method in ['PATCH', 'PUT', 'DELETE']:
+            return [IsSchoolAdmin()]
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         qs = Classroom.objects.all()
         if getattr(self.request.user, 'tenant_id', None):
             qs = qs.filter(tenant=self.request.user.tenant)
         return qs
+
+    def destroy(self, request, *args, **kwargs):
+        classroom = self.get_object()
+        student_count = classroom.students.filter(is_active=True).count()
+        if student_count > 0:
+            return Response(
+                {
+                    'detail': (
+                        f'Cannot delete {classroom} — it still has {student_count} '
+                        f'active student{"s" if student_count != 1 else ""} assigned. '
+                        f'Transfer them to another classroom first.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 class ClassroomStudentsView(generics.ListAPIView):
@@ -105,7 +156,13 @@ class GuardianListCreateView(generics.ListCreateAPIView):
     search_fields = ['first_name', 'last_name', 'phone', 'national_id']
 
     def get_queryset(self):
-        return Guardian.objects.all()
+        qs = Guardian.objects.all()
+        if getattr(self.request.user, 'tenant_id', None):
+            qs = qs.filter(tenant=self.request.user.tenant)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(tenant=self.request.user.tenant)
 
 
 class GuardianDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -116,7 +173,12 @@ class GuardianDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     serializer_class = GuardianSerializer
     permission_classes = [IsSchoolAdmin]
-    queryset = Guardian.objects.all()
+
+    def get_queryset(self):
+        qs = Guardian.objects.all()
+        if getattr(self.request.user, 'tenant_id', None):
+            qs = qs.filter(tenant=self.request.user.tenant)
+        return qs
 
 
 # ─── Students ─────────────────────────────────────────────────────────────────
@@ -147,14 +209,27 @@ class StudentListCreateView(generics.ListCreateAPIView):
         ).order_by('-created_at')
         if getattr(self.request.user, 'tenant_id', None):
             qs = qs.filter(tenant=self.request.user.tenant)
-        # Filter inactive/transferred unless explicitly requested
+        if getattr(self.request.user, 'role', None) == 'teacher':
+            qs = qs.filter(classroom_id__in=_teacher_accessible_classroom_ids(self.request.user))
+        
         show_all = self.request.query_params.get('show_all', 'false').lower() == 'true'
         if not show_all:
             qs = qs.filter(is_active=True)
         return qs
 
     def perform_create(self, serializer):
-        serializer.save(tenant=self.request.user.tenant)
+        tenant = self.request.user.tenant
+        limit = PLAN_LIMITS.get(tenant.plan)
+        if limit is not None:
+            current_count = Student.objects.filter(tenant=tenant, is_active=True).count()
+            if current_count >= limit:
+                raise ValidationError({
+                    'detail': (
+                        f'Your {tenant.get_plan_display()} plan allows up to {limit} students. '
+                        f'You currently have {current_count}. Upgrade your plan to add more students.'
+                    )
+                })
+        serializer.save(tenant=tenant)
 
 
 class StudentDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -175,9 +250,16 @@ class StudentDetailView(generics.RetrieveUpdateDestroyAPIView):
         qs = Student.objects.select_related('classroom', 'primary_guardian').order_by('-created_at')
         if getattr(self.request.user, 'tenant_id', None):
             qs = qs.filter(tenant=self.request.user.tenant)
+        if getattr(self.request.user, 'role', None) == 'teacher':
+            qs = qs.filter(classroom_id__in=_teacher_accessible_classroom_ids(self.request.user))
         return qs
 
     def perform_update(self, serializer):
+        user = self.request.user
+        if getattr(user, 'role', None) == 'teacher':
+            student = self.get_object()
+            if student.classroom_id not in _teacher_accessible_classroom_ids(user):
+                raise PermissionDenied({"detail": "You do not have permission to modify this student."})
         serializer.save(tenant=self.request.user.tenant)
 
     def destroy(self, request, *args, **kwargs):
@@ -201,7 +283,11 @@ class StudentSearchView(APIView):
         if len(q) < 2:
             return Response([])
 
-        students = Student.objects.filter(
+        qs = Student.objects.all()
+        if getattr(request.user, 'tenant_id', None):
+            qs = qs.filter(tenant=request.user.tenant)
+
+        students = qs.filter(
             Q(first_name__icontains=q) |
             Q(last_name__icontains=q) |
             Q(admission_number__icontains=q),
@@ -404,6 +490,27 @@ class StudentPromoteAllView(APIView):
 
         result = promote_all_students_to_next_grade(request.user.tenant)
 
+        # Log the bulk promotion activity
+        from activity.models import ActivityLog
+        from activity.utils import log_activity
+
+        log_activity(
+            tenant=request.user.tenant,
+            activity_type=ActivityLog.ActivityType.STUDENT_PROMOTED,
+            title="Bulk student promotion completed",
+            description=(
+                f"Promoted {result.get('promoted_count', 0)} students, "
+                f"graduated {result.get('graduated_count', 0)}, "
+                f"skipped {result.get('skipped_count', 0)}"
+            ),
+            actor=request.user,
+            metadata={
+                'promoted': result.get('promoted_count', 0),
+                'graduated': result.get('graduated_count', 0),
+                'skipped': result.get('skipped_count', 0),
+            },
+        )
+
         return Response({
             'detail': 'Student promotion completed.',
             **result,
@@ -477,3 +584,67 @@ class StudentImportTemplateView(APIView):
         ])
 
         return response
+
+
+# ─── Classroom Homeroom Assignment ───────────────────────────────────────────
+
+class AssignClassTeacherView(APIView):
+    """
+    POST /api/students/classrooms/<id>/assign-class-teacher/
+    Body: { "teacher_id": <CustomUser id> }
+    Sets Classroom.class_teacher.
+    """
+    permission_classes = [IsSchoolAdmin]
+
+    def post(self, request, pk):
+        tenant = request.user.tenant
+        try:
+            classroom = Classroom.objects.get(pk=pk, tenant=tenant)
+        except Classroom.DoesNotExist:
+            return Response({'detail': 'Classroom not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        teacher_id = request.data.get('teacher_id')
+        if not teacher_id:
+            return Response({'detail': 'teacher_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            teacher = CustomUser.objects.get(pk=teacher_id, tenant=tenant, role=CustomUser.Role.TEACHER)
+        except CustomUser.DoesNotExist:
+            return Response(
+                {'detail': 'That user is not a teacher in this school.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        previous_teacher_name = classroom.class_teacher.get_full_name() if classroom.class_teacher else None
+        classroom.class_teacher = teacher
+        classroom.save(update_fields=['class_teacher'])
+
+        return Response({
+            'detail': (
+                f'{teacher.get_full_name()} assigned as class teacher for {classroom}.'
+                + (f' (Previously: {previous_teacher_name})' if previous_teacher_name else '')
+            ),
+            'classroom': ClassroomSerializer(classroom).data,
+        })
+
+
+class UnassignClassTeacherView(APIView):
+    """
+    POST /api/students/classrooms/<id>/unassign-class-teacher/
+    Clears Classroom.class_teacher.
+    """
+    permission_classes = [IsSchoolAdmin]
+
+    def post(self, request, pk):
+        tenant = request.user.tenant
+        try:
+            classroom = Classroom.objects.get(pk=pk, tenant=tenant)
+        except Classroom.DoesNotExist:
+            return Response({'detail': 'Classroom not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        classroom.class_teacher = None
+        classroom.save(update_fields=['class_teacher'])
+        return Response({
+            'detail': f'Class teacher removed from {classroom}.',
+            'classroom': ClassroomSerializer(classroom).data,
+        })

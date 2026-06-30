@@ -100,15 +100,19 @@ export default function NationalExamDetailPage() {
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
-      const [sessionRes, candidateRes, subjectRes] = await Promise.all([
+      const [sessionRes, candidateRes] = await Promise.all([
         academicsApi.getNationalSession(sessionId),
         academicsApi.getCandidates({ session: sessionId }),
-        academicsApi.getSubjects(),
       ])
       const candidateList = listFromResponse(candidateRes.data)
       setSession(sessionRes.data)
       setCandidates(candidateList)
+
+      // Only fetch subjects for this session's grade level
+      const gradeLevel = sessionRes.data?.grade_level || ''
+      const subjectRes = await academicsApi.getSubjects(gradeLevel ? { grade_level: gradeLevel } : {})
       setSubjects(listFromResponse(subjectRes.data))
+
       const resultPairs = await Promise.all(candidateList.map(candidate => academicsApi.getNationalResults({ candidate: candidate.id })))
       const next = {}
       resultPairs.flatMap(res => listFromResponse(res.data)).forEach(result => {
@@ -196,7 +200,7 @@ export default function NationalExamDetailPage() {
       {message && <div className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-700">{message}</div>}
       <Card className="p-2">
         <div className="flex gap-2">
-          {['candidates', 'results'].map(item => <button key={item} onClick={() => setActiveTab(item)} className={`rounded-lg px-4 py-2 text-sm font-medium capitalize ${tab === item ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{item}</button>)}
+          {['candidates', 'results'].map(item => <button key={item} onClick={() => setActiveTab(item)} className={`rounded-lg px-4 py-2 text-sm font-medium capitalize ${tab === item ? 'bg-[var(--brand-primary)] text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{item}</button>)}
         </div>
       </Card>
       {tab === 'candidates' ? (

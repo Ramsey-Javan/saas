@@ -8,9 +8,9 @@ from .curriculum import TERM_CHOICES
 
 class NationalExamSession(TenantModel):
     class ExamName(models.TextChoices):
-        KNAT = 'KNAT', 'Grade 3 National Assessment (KNAT)'
-        KPAT = 'KPAT', 'Grade 6 Performance Assessment (KPAT)'
-        KJSAT = 'KJSAT', 'Grade 9 Junior School Assessment (KJSAT)'
+        KEYA = 'KEYA', 'KEYA (Kenya Early Years Assessment) – Grade 3'
+        KPSEA = 'KPSEA', 'KPSEA (Kenya Primary School Education Assessment) – Grade 6'
+        KJSEA = 'KJSEA', 'KJSEA (Kenya Junior School Education Assessment) – Grade 9'
 
     name = models.CharField(max_length=10, choices=ExamName.choices)
     academic_year = models.PositiveIntegerField()
@@ -33,6 +33,15 @@ class NationalExamSession(TenantModel):
 
     def __str__(self):
         return f"{self.get_name_display()} - {self.classroom} - {self.academic_year}"
+
+    @property
+    def target_grade_level(self):
+        mapping = {
+            'KEYA': 'Grade 3',
+            'KPSEA': 'Grade 6',
+            'KJSEA': 'Grade 9',
+        }
+        return mapping.get(self.name, '')
 
 
 class NationalExamCandidate(TenantModel):

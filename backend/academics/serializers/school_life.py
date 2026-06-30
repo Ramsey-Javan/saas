@@ -33,6 +33,7 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
 class AttendanceSessionSerializer(serializers.ModelSerializer):
     records = AttendanceRecordSerializer(many=True, read_only=True)
     classroom_name = serializers.SerializerMethodField()
+    class_teacher_id = serializers.IntegerField(source='classroom.class_teacher_id', read_only=True)
     teacher_name = serializers.SerializerMethodField()
     subject_name = serializers.SerializerMethodField()
     present_count = serializers.SerializerMethodField()
@@ -42,7 +43,7 @@ class AttendanceSessionSerializer(serializers.ModelSerializer):
     class Meta:
         model = AttendanceSession
         fields = [
-            'id', 'classroom', 'classroom_name',
+            'id', 'classroom', 'classroom_name','class_teacher_id',
             'subject', 'subject_name',
             'teacher', 'teacher_name',
             'date', 'session_type', 'term', 'academic_year',
@@ -73,23 +74,32 @@ class AttendanceSessionSerializer(serializers.ModelSerializer):
 
 class AttendanceSessionListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for attendance session lists."""
-
-    classroom_name = serializers.SerializerMethodField()
+    classroom_name = serializers.CharField(source='classroom.name', read_only=True)
+    class_teacher_id = serializers.IntegerField(source='classroom.class_teacher_id', read_only=True)
+    teacher_name = serializers.SerializerMethodField()
+    subject_name = serializers.SerializerMethodField()
     present_count = serializers.SerializerMethodField()
     absent_count = serializers.SerializerMethodField()
     total_students = serializers.SerializerMethodField()
 
     class Meta:
         model = AttendanceSession
+        # FIX: Added 'teacher_name' and 'subject_name' to the fields list
+        # They were declared as SerializerMethodField but missing from fields
         fields = [
-            'id', 'classroom', 'classroom_name',
+            'id', 'classroom', 'classroom_name', 'class_teacher_id',
+            'teacher', 'teacher_name',
+            'subject', 'subject_name',
             'date', 'session_type', 'term', 'academic_year',
-            'is_locked', 'present_count',
-            'absent_count', 'total_students',
+            'is_locked',
+            'present_count', 'absent_count', 'total_students',
         ]
 
-    def get_classroom_name(self, obj):
-        return str(obj.classroom)
+    def get_teacher_name(self, obj):
+        return obj.teacher.get_full_name() if obj.teacher else ""
+
+    def get_subject_name(self, obj):
+        return obj.subject.name if obj.subject else ""
 
     def get_present_count(self, obj):
         return obj.records.filter(status='P').count()

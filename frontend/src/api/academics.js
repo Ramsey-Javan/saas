@@ -29,6 +29,7 @@ export const academicsApi = {
   updateAssignment: (id, data) => api.patch(`/academics/assignments/${id}/`, data),
   deleteAssignment: (id) => api.delete(`/academics/assignments/${id}/`),
 
+  // Grades & Performance
   getGrades: (params) => api.get('/academics/grades/', { params }),
   createGrade: (data) => api.post('/academics/grades/', data),
   bulkGrade: (data) => api.post('/academics/grades/bulk/', data),
@@ -37,6 +38,7 @@ export const academicsApi = {
   }),
   getStudentReport: (params) => api.get('/academics/grades/student-report/', { params }),
   getGradeSheet: (params) => api.get('/academics/grades/grade-sheet/', { params }),
+  getClassExamAverage: (params) => api.get('/academics/grades/class-exam-average/', { params }),
 
   getExamConfig: () => api.get('/academics/exam-config/'),
   updateExamConfig: (data) => api.put('/academics/exam-config/', data),

@@ -87,7 +87,7 @@ function MarksCell({ student, subject, value, dirty, onSave }) {
       {!open ? (
         <button
           onClick={() => setOpen(true)}
-          className={`h-16 w-full rounded border px-2 text-left text-xs ${color?.bg || 'bg-gray-50'} ${color?.border || 'border-gray-100'} ${dirty ? 'ring-2 ring-blue-300' : ''}`}
+          className={`h-16 w-full rounded border px-2 text-left text-xs ${color?.bg || 'bg-gray-50'} ${color?.border || 'border-gray-100'} ${dirty ? 'ring-2 ring-[var(--brand-primary-ring)]' : ''}`}
         >
           <span className="block font-semibold text-gray-900">{value?.marks ? `${value.marks}/${subject.total_marks}` : '-'}</span>
           <span className="mt-1 block"><LevelBadge level={value?.cbc_level} /></span>
@@ -204,10 +204,12 @@ export default function ExamMarksSheetPage() {
     }
   }
 
+  // Updated: include 'name' column after admission_number, auto-populated from student records
   const downloadTemplate = () => {
-    const rows = [['admission_number', 'subject_code', 'marks']]
+    const headers = ['admission_number', 'name', ...sheet.exam_subjects.map(s => s.subject_code)]
+    const rows = [headers]
     sheet.students.forEach(student => {
-      sheet.exam_subjects.forEach(subject => rows.push([student.admission_number, subject.subject_code, '']))
+      rows.push([student.admission_number, student.name, ...sheet.exam_subjects.map(() => '')])
     })
     downloadRowsAsCSV(`${sheet.exam.name}_marks_template.csv`, rows)
   }
@@ -220,53 +222,71 @@ export default function ExamMarksSheetPage() {
   if (loading) return <div className="flex justify-center py-20"><Spinner className="h-7 w-7" /></div>
   if (!sheet) return <Card className="p-6 text-sm text-gray-500">Exam not found.</Card>
 
+  const hasSubjects = sheet.exam_subjects.length > 0
+
   return (
     <div className="space-y-4">
       <PageHeader
         title={`${sheet.exam.name} - ${sheet.exam.classroom_name} - ${termLabel(sheet.exam.term)} ${sheet.exam.academic_year}`}
         action={
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => setImportOpen(true)} className="gap-2"><Upload size={16} /> Import CSV</Button>
-            <Button variant="secondary" onClick={downloadTemplate} className="gap-2"><Download size={16} /> Download Template</Button>
-            <Button variant="secondary" onClick={sync} className="gap-2"><RefreshCw size={16} /> Sync to CBC</Button>
-            <Button onClick={saveAll} loading={saving} className={Object.keys(dirty).length ? 'ring-2 ring-blue-300' : ''}>Save All</Button>
-          </div>
+          hasSubjects ? (
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" onClick={() => setImportOpen(true)} className="gap-2"><Upload size={16} /> Import CSV</Button>
+              <Button variant="secondary" onClick={downloadTemplate} className="gap-2"><Download size={16} /> Download Template</Button>
+              <Button variant="secondary" onClick={sync} className="gap-2"><RefreshCw size={16} /> Sync to CBC</Button>
+              <Button onClick={saveAll} loading={saving} className={Object.keys(dirty).length ? 'ring-2 ring-[var(--brand-primary-ring)]' : ''}>Save All</Button>
+            </div>
+          ) : (
+            <span className="text-sm text-gray-500">No subjects assigned</span>
+          )
         }
       />
       {(message || progress) && <div className="rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-700">{progress || message}</div>}
-      <Card className="overflow-hidden">
-        <div className="max-h-[72vh] overflow-auto">
-          <table className="w-max min-w-full border-collapse text-sm">
-            <thead className="sticky top-0 z-10 bg-white">
-              <tr>
-                <th className="sticky left-0 z-20 min-w-[240px] border-r border-b border-gray-100 bg-white px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">Student</th>
-                {sheet.exam_subjects.map(subject => (
-                  <th key={subject.id} className="min-w-[116px] border-r border-b border-gray-100 px-2 py-2 text-center">
-                    <button onClick={() => fillColumn(subject.id)} className="text-xs font-semibold text-gray-800 hover:text-blue-600">
-                      {subject.subject_name}
-                      <span className="block font-normal text-gray-500">/{subject.total_marks}</span>
-                    </button>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sheet.students.map(student => (
-                <tr key={student.id}>
-                  <td className="sticky left-0 z-10 border-r border-b border-gray-100 bg-white px-4 py-2">
-                    <p className="font-medium text-gray-900">{student.name}</p>
-                    <p className="text-xs text-gray-500">{student.admission_number}</p>
-                  </td>
-                  {sheet.exam_subjects.map(subject => {
-                    const key = `${student.id}_${subject.id}`
-                    return <MarksCell key={key} student={student} subject={subject} value={results[key]} dirty={!!dirty[key]} onSave={value => saveCell(student.id, subject.id, value)} />
-                  })}
+
+      {hasSubjects ? (
+        <Card className="overflow-hidden">
+          <div className="max-h-[72vh] overflow-auto">
+            <table className="w-max min-w-full border-collapse text-sm">
+              <thead className="sticky top-0 z-10 bg-white">
+                <tr>
+                  <th className="sticky left-0 z-20 min-w-[240px] border-r border-b border-gray-100 bg-white px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">Student</th>
+                  {sheet.exam_subjects.map(subject => (
+                    <th key={subject.id} className="min-w-[116px] border-r border-b border-gray-100 px-2 py-2 text-center">
+                      <button onClick={() => fillColumn(subject.id)} className="text-xs font-semibold text-gray-800 hover:text-[var(--brand-primary)]">
+                        {subject.subject_name}
+                        <span className="block font-normal text-gray-500">/{subject.total_marks}</span>
+                      </button>
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+              </thead>
+              <tbody>
+                {sheet.students.map(student => (
+                  <tr key={student.id}>
+                    <td className="sticky left-0 z-10 border-r border-b border-gray-100 bg-white px-4 py-2">
+                      <p className="font-medium text-gray-900">{student.name}</p>
+                      <p className="text-xs text-gray-500">{student.admission_number}</p>
+                    </td>
+                    {sheet.exam_subjects.map(subject => {
+                      const key = `${student.id}_${subject.id}`
+                      return <MarksCell key={key} student={student} subject={subject} value={results[key]} dirty={!!dirty[key]} onSave={value => saveCell(student.id, subject.id, value)} />
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      ) : (
+        <Card className="p-8 text-center">
+          <p className="text-lg font-medium text-gray-900">No exam subjects assigned</p>
+          <p className="mt-2 text-sm text-gray-500">
+            There are no subjects configured or assigned for this exam.
+            If you are a teacher, please contact an administrator to assign you to exam subjects.
+          </p>
+        </Card>
+      )}
+
       {importOpen && <ImportModal examId={examId} onClose={() => setImportOpen(false)} onDone={fetchSheet} />}
     </div>
   )

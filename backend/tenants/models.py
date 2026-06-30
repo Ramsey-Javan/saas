@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
@@ -54,6 +55,27 @@ class Tenant(models.Model):
         if not self.slug:
             self.slug = slugify(self.name)
         super().save(*args, **kwargs)
+
+    def is_in_grace_period(self):
+        if self.plan != self.Plan.TRIAL or not self.trial_ends_on:
+            return False
+        from datetime import timedelta
+        today = timezone.localdate()
+        grace_end = self.trial_ends_on + timedelta(days=3)
+        return self.trial_ends_on < today <= grace_end
+
+    def is_trial_hard_expired(self):
+        if self.plan != self.Plan.TRIAL or not self.trial_ends_on:
+            return False
+        from datetime import timedelta
+        today = timezone.localdate()
+        grace_end = self.trial_ends_on + timedelta(days=3)
+        return today > grace_end
+
+    def days_until_trial_expiry(self):
+        if not self.trial_ends_on:
+            return None
+        return (self.trial_ends_on - timezone.localdate()).days
 
 
 class Domain(models.Model):

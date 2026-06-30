@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -16,9 +16,11 @@ const schema = z.object({
 
 export default function LoginPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { setAuth, school } = useAuthStore()
   const [showPassword, setShowPassword] = useState(false)
   const [serverError, setServerError] = useState('')
+  const successMessage = location.state?.message
 
   const {
     register,
@@ -30,7 +32,8 @@ export default function LoginPage() {
     setServerError('')
     try {
       const { data } = await authAPI.login({ email, password })
-      setAuth(data.user, data.access, data.refresh)
+      // Pass tenant data from login response so ALL users get correct branding
+      setAuth(data.user, data.access, data.refresh, data.tenant)
       navigate(ROLE_DASHBOARDS[data.user?.role] || '/dashboard')
     } catch (error) {
       setServerError(
@@ -43,16 +46,14 @@ export default function LoginPage() {
 
   // School branding from tenant (injected at runtime)
   const schoolName = school?.name || 'School Management'
-  const primaryColor = school?.primary_color || '#1e40af'
   const logo = school?.logo
 
   return (
-    <div className="min-h-screen flex" style={{ '--brand': primaryColor }}>
+    <div className="min-h-screen flex">
 
       {/* ── Left panel — branding ─────────────────────────────────────── */}
       <div
-        className="hidden lg:flex lg:w-1/2 flex-col justify-between p-12 text-white relative overflow-hidden"
-        style={{ backgroundColor: primaryColor }}
+        className="hidden lg:flex lg:w-1/2 flex-col justify-between p-12 text-white relative overflow-hidden bg-[var(--brand-primary)]"
       >
         {/* Background pattern */}
         <div className="absolute inset-0 opacity-10">
@@ -100,8 +101,7 @@ export default function LoginPage() {
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center gap-2 mb-8">
             <div
-              className="h-9 w-9 rounded-lg flex items-center justify-center"
-              style={{ backgroundColor: primaryColor }}
+              className="h-9 w-9 rounded-lg flex items-center justify-center bg-[var(--brand-primary)]"
             >
               <GraduationCap className="h-5 w-5 text-white" />
             </div>
@@ -114,7 +114,12 @@ export default function LoginPage() {
               <p className="text-gray-500 mt-1">Sign in to your account</p>
             </div>
 
-            {/* Server error */}
+            {/* Success / error banners */}
+            {successMessage && (
+              <div className="mb-5 px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm">
+                {successMessage}
+              </div>
+            )}
             {serverError && (
               <div className="mb-5 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
                 {serverError}
@@ -138,9 +143,8 @@ export default function LoginPage() {
                     'focus:ring-2 focus:border-transparent placeholder:text-gray-400',
                     errors.email
                       ? 'border-red-300 focus:ring-red-200'
-                      : 'border-gray-200 focus:ring-blue-100'
+                      : 'border-gray-200 focus:ring-[var(--brand-primary-ring)]'
                   )}
-                  style={!errors.email ? { '--tw-ring-color': `${primaryColor}33` } : {}}
                 />
                 {errors.email && (
                   <p className="mt-1 text-xs text-red-600">{errors.email.message}</p>
@@ -163,7 +167,7 @@ export default function LoginPage() {
                       'focus:ring-2 focus:border-transparent placeholder:text-gray-400',
                       errors.password
                         ? 'border-red-300 focus:ring-red-200'
-                        : 'border-gray-200 focus:ring-blue-100'
+                        : 'border-gray-200 focus:ring-[var(--brand-primary-ring)]'
                     )}
                   />
                   <button
@@ -186,9 +190,8 @@ export default function LoginPage() {
                 className={cn(
                   'w-full py-2.5 rounded-lg text-sm font-semibold text-white transition-all',
                   'disabled:opacity-60 disabled:cursor-not-allowed',
-                  'hover:opacity-90 active:scale-[0.99]'
+                  'bg-[var(--brand-primary)] hover:opacity-90 active:scale-[0.99]'
                 )}
-                style={{ backgroundColor: primaryColor }}
               >
                 {isSubmitting ? (
                   <span className="flex items-center justify-center gap-2">

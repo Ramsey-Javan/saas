@@ -4,6 +4,7 @@ import io
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Avg
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
@@ -13,7 +14,7 @@ from rest_framework.response import Response
 
 from students.models import Student
 
-from ..models import CBCGrade, ExamConfig, LearningOutcome
+from ..models import CBCGrade, ExamConfig, LearningOutcome,ExamResult, ExamSetup, ExamSubject
 from ..permissions import IsTeacherOrAdmin
 from ..serializers import (
     BulkGradeSerializer,
@@ -73,6 +74,77 @@ class CBCGradeViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             if outcome.sub_strand.strand.subject_id not in set(_teacher_subject_ids(self.request.user)):
                 raise PermissionDenied('You can only grade your assigned subjects.')
         serializer.save(tenant=self.request.user.tenant, assessed_by=self.request.user)
+        
+    @action(detail=False, methods=['get'], url_path='class-exam-average')
+    def class_exam_average(self, request):
+        """
+        GET /api/academics/grades/class-exam-average/?classroom=<id>&exam=<exam_setup_id>
+ 
+        Returns the overall average percentage across all subjects in the
+        given exam for the given classroom, plus a per-subject breakdown.
+        Used by the teacher dashboard's "My Classes" widget.
+ 
+        Access rules:
+        - Admins: any classroom/exam in their tenant.
+        - Teachers: allowed if EITHER (a) they are the homeroom
+          (class_teacher) for this classroom, OR (b) they teach at least
+          one subject in this classroom via ClassSubjectAssignment. A
+          homeroom teacher who teaches none of the subjects in this exam
+          still gets the overall average and the full per-subject
+          breakdown (per Javan: class teachers have full visibility into
+          their class's academic standing), but does NOT get grade-entry
+          rights here — this endpoint is read-only regardless.
+        """
+        classroom_id = request.query_params.get('classroom')
+        exam_id = request.query_params.get('exam')
+        if not classroom_id or not exam_id:
+            return Response(
+                {'error': 'classroom and exam params are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+ 
+        tenant = request.user.tenant
+        from students.models import Classroom
+ 
+        classroom = Classroom.objects.filter(id=classroom_id, tenant=tenant).first()
+        if not classroom:
+            return Response({'error': 'Classroom not found.'}, status=status.HTTP_404_NOT_FOUND)
+ 
+        exam = ExamSetup.objects.filter(id=exam_id, tenant=tenant, classroom=classroom).first()
+        if not exam:
+            return Response({'error': 'Exam not found for this classroom.'}, status=status.HTTP_404_NOT_FOUND)
+ 
+        if _is_teacher(request.user):
+            is_homeroom = classroom.class_teacher_id == request.user.id
+            teaches_here = classroom.id in set(_teacher_classroom_ids(request.user))
+            if not (is_homeroom or teaches_here):
+                raise PermissionDenied('You do not have access to this classroom.')
+ 
+        exam_subjects = ExamSubject.objects.filter(exam=exam).select_related('subject')
+ 
+        per_subject = []
+        for exam_subject in exam_subjects:
+            agg = ExamResult.objects.filter(exam_subject=exam_subject).aggregate(avg_pct=Avg('percentage'))
+            per_subject.append({
+                'subject_id': exam_subject.subject_id,
+                'subject_name': exam_subject.subject.name,
+                'total_marks': exam_subject.total_marks,
+                'average_percentage': round(agg['avg_pct'], 1) if agg['avg_pct'] is not None else None,
+                'entries_count': ExamResult.objects.filter(exam_subject=exam_subject).count(),
+            })
+ 
+        overall_agg = ExamResult.objects.filter(exam_subject__exam=exam).aggregate(avg_pct=Avg('percentage'))
+        overall_average = round(overall_agg['avg_pct'], 1) if overall_agg['avg_pct'] is not None else None
+ 
+        return Response({
+            'classroom': classroom.id,
+            'classroom_name': str(classroom),
+            'exam': exam.id,
+            'exam_name': exam.name,
+            'overall_average_percentage': overall_average,
+            'subjects': per_subject,
+        })
+ 
 
     @action(detail=False, methods=['post'], url_path='bulk')
     def bulk_grade(self, request):
@@ -141,15 +213,25 @@ class CBCGradeViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         errors = []
         reader = csv.DictReader(io.StringIO(file.read().decode('utf-8')))
 
-        with transaction.atomic():
-            for i, row in enumerate(reader, start=2):
-                adm = row.get('admission_number', '').strip()
-                outcome_id = row.get('outcome_id', '').strip()
-                level = row.get('level', '').strip().upper()
-                remarks = row.get('remarks', '').strip()
+        # Normalize headers and skip non-grade columns
+        fieldnames = [h.strip().upper() for h in (reader.fieldnames or [])]
+        if 'ADMISSION_NUMBER' not in fieldnames:
+            return Response({'error': 'CSV must have an admission_number column.'}, status=status.HTTP_400_BAD_REQUEST)
 
-                if not adm or not outcome_id or not level:
-                    errors.append(f'Row {i}: missing required fields')
+        with transaction.atomic():
+            for i, raw_row in enumerate(reader, start=2):
+                row = {k.strip().upper(): (v.strip() if v is not None else '') for k, v in raw_row.items()}
+                adm = row.get('ADMISSION_NUMBER', '')
+                outcome_id = row.get('OUTCOME_ID', '').strip()
+                level = row.get('LEVEL', '').strip().upper()
+                remarks = row.get('REMARKS', '').strip()
+
+                # Skip rows with empty level (allowing template rows to be skipped)
+                if not level:
+                    continue
+
+                if not adm or not outcome_id:
+                    errors.append(f'Row {i}: missing admission_number or outcome_id')
                     continue
                 if level not in CBCGrade.Level.values:
                     errors.append(f'Row {i}: invalid level {level}')

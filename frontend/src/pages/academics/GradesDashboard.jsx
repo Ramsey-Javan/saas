@@ -136,7 +136,7 @@ export default function GradesDashboard() {
                     className="flex w-full items-center justify-between rounded-lg border border-gray-100 px-3 py-2 text-left text-sm hover:bg-gray-50"
                   >
                     <span className="font-medium text-gray-900">{subject.subject_name}</span>
-                    <span className="text-xs text-blue-600">Open</span>
+                    <span className="text-xs text-[var(--brand-primary)]">Open</span>
                   </button>
                 ))}
               </div>

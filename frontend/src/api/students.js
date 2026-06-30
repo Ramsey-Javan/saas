@@ -28,7 +28,13 @@ export const studentsApi = {
   getClassrooms: (params) => api.get('/students/classrooms/', { params }),
   getClassroom: (id) => api.get(`/students/classrooms/${id}/`),
   createClassroom: (data) => api.post('/students/classrooms/', data),
+  updateClassroom: (id, data) => api.patch(`/students/classrooms/${id}/`, data),
+  deleteClassroom: (id) => api.delete(`/students/classrooms/${id}/`),
   getClassroomStudents: (id, params) => api.get(`/students/classrooms/${id}/students/`, { params }),
+  assignClassTeacher: (classroomId, teacherId) =>
+    api.post(`/students/classrooms/${classroomId}/assign-class-teacher/`, { teacher_id: teacherId }),
+  unassignClassTeacher: (classroomId) =>
+    api.post(`/students/classrooms/${classroomId}/unassign-class-teacher/`),
 
   // Guardians
   getGuardians: (params) => api.get('/students/guardians/', { params }),

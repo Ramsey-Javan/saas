@@ -47,7 +47,7 @@ export default function ScheduledMessagesPage() {
             key={t.id}
             type="button"
             onClick={() => setTab(t.id)}
-            className={`rounded-lg px-4 py-2 text-sm font-medium ${tab === t.id ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600'}`}
+            className={`rounded-lg px-4 py-2 text-sm font-medium ${tab === t.id ? 'bg-[var(--brand-primary)] text-white' : 'bg-white border border-gray-200 text-gray-600'}`}
           >
             {t.label}
           </button>

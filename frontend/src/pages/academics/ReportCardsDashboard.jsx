@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Download, FileText } from 'lucide-react'
+import { Download, FileText, Printer } from 'lucide-react'
 import { academicsApi } from '@/api/academics'
 import { studentsApi } from '@/api/students'
 import { useAuthStore } from '@/store/authStore'
@@ -135,6 +135,19 @@ export default function ReportCardsDashboard() {
     pending: cards.filter(c => !c.class_teacher_remarks || !c.principal_remarks).length,
   }), [cards])
 
+  // Select All logic
+  const allSelected = cards.length > 0 && cards.every(card => selected.includes(card.id))
+  const someSelected = cards.some(card => selected.includes(card.id)) && !allSelected
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelected(current => current.filter(id => !cards.some(c => c.id === id)))
+    } else {
+      const visibleIds = cards.map(c => c.id)
+      setSelected(current => [...new Set([...current, ...visibleIds])])
+    }
+  }
+
   const openPdf = async (card) => {
     const { data } = await academicsApi.getReportCardPdf(card.id)
     openBlobInNewTab(data)
@@ -152,6 +165,12 @@ export default function ReportCardsDashboard() {
     for (const id of selected) {
       const { data } = await academicsApi.getReportCardPdf(id)
       openBlobInNewTab(data)
+    }
+  }
+  const printSelected = () => {
+    for (const id of selected) {
+      const card = cards.find(c => c.id === id)
+      if (card) openPdf(card)
     }
   }
 
@@ -179,29 +198,61 @@ export default function ReportCardsDashboard() {
         <StatCard label="Drafts" value={stats.drafts} tone="orange" />
         <StatCard label="Pending Remarks" value={stats.pending} tone="red" />
       </div>
-      <Card className="p-2"><div className="flex gap-2">{['termly', 'annual'].map(type => <button key={type} onClick={() => setFilters(f => ({ ...f, report_type: type }))} className={`rounded-lg px-4 py-2 text-sm font-medium capitalize ${filters.report_type === type ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{type}</button>)}</div></Card>
+      <Card className="p-2"><div className="flex gap-2">{['termly', 'annual'].map(type => <button key={type} onClick={() => setFilters(f => ({ ...f, report_type: type }))} className={`rounded-lg px-4 py-2 text-sm font-medium capitalize ${filters.report_type === type ? 'bg-[var(--brand-primary)] text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{type}</button>)}</div></Card>
       {selected.length > 0 && (
         <Card className="p-3 flex flex-wrap gap-2">
           {isAdmin && <Button size="sm" onClick={publishSelected}>Publish Selected</Button>}
           <Button size="sm" variant="secondary" onClick={downloadSelected} className="gap-1"><Download size={14} /> Download PDFs</Button>
+          <Button size="sm" variant="secondary" onClick={printSelected} className="gap-1"><Printer size={14} /> Print Selected</Button>
+          <span className="text-sm text-gray-500 self-center ml-auto">{selected.length} selected</span>
         </Card>
       )}
-      <Card>
+      <Card className="overflow-hidden">
         {loading ? <div className="flex justify-center py-20"><Spinner className="h-7 w-7" /></div> : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead><tr className="border-b border-gray-100">{['', 'Student', 'Class', 'Term', 'Year', 'Attendance %', 'Status', 'Actions'].map(h => <th key={h} className="px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">{h}</th>)}</tr></thead>
+          <div className="overflow-x-auto" style={{ scrollbarWidth: 'auto' }}>
+            <table className="w-full text-sm min-w-[900px]">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-4 py-3 text-left">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={el => { if (el) el.indeterminate = someSelected }}
+                      onChange={toggleSelectAll}
+                      title={allSelected ? 'Deselect all' : 'Select all'}
+                    />
+                  </th>
+                  {['Student', 'Class', 'Term', 'Year', 'Attendance %', 'Status', 'Actions'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">{h}</th>
+                  ))}
+                </tr>
+              </thead>
               <tbody className="divide-y divide-gray-50">
-                {cards.length === 0 ? <EmptyTableRow colSpan={8} message="No report cards found." /> : cards.map(card => (
-                  <tr key={card.id}>
-                    <td className="px-4 py-3"><input type="checkbox" checked={selected.includes(card.id)} onChange={e => setSelected(current => e.target.checked ? [...current, card.id] : current.filter(id => id !== card.id))} /></td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{card.student_name}</td>
-                    <td className="px-4 py-3 text-gray-600">{card.classroom_name}</td>
-                    <td className="px-4 py-3 text-gray-600">{termLabel(card.term)}</td>
-                    <td className="px-4 py-3 text-gray-600">{card.academic_year}</td>
-                    <td className="px-4 py-3">{card.attendance_percentage || 0}%</td>
-                    <td className="px-4 py-3"><StatusBadge status={card.status} /></td>
-                    <td className="px-4 py-3"><div className="flex gap-2"><Button size="sm" variant="secondary" onClick={() => setModal({ type: 'remarks', card })}>Edit Remarks</Button><Button size="sm" variant="secondary" onClick={() => openPdf(card)}>PDF</Button><Button size="sm" variant="secondary" onClick={() => navigate(`/academics/report-cards/${card.id}`)}>View</Button>{isAdmin && card.status !== 'published' && <Button size="sm" onClick={() => publish(card)}>Publish</Button>}</div></td>
+                {cards.length === 0 ? (
+                  <EmptyTableRow colSpan={8} message="No report cards found." />
+                ) : cards.map(card => (
+                  <tr key={card.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(card.id)}
+                        onChange={e => setSelected(current => e.target.checked ? [...current, card.id] : current.filter(id => id !== card.id))}
+                      />
+                    </td>
+                    <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">{card.student_name}</td>
+                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{card.classroom_name}</td>
+                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{termLabel(card.term)}</td>
+                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{card.academic_year}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">{card.attendance_percentage || 0}%</td>
+                    <td className="px-4 py-3 whitespace-nowrap"><StatusBadge status={card.status} /></td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="secondary" onClick={() => setModal({ type: 'remarks', card })}>Edit Remarks</Button>
+                        <Button size="sm" variant="secondary" onClick={() => openPdf(card)}>PDF</Button>
+                        <Button size="sm" variant="secondary" onClick={() => navigate(`/academics/report-cards/${card.id}`)}>View</Button>
+                        {isAdmin && card.status !== 'published' && <Button size="sm" onClick={() => publish(card)}>Publish</Button>}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>

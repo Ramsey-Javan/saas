@@ -132,7 +132,7 @@ export default function InvoiceGenerationPage() {
             <span>{progress.done}/{progress.total}</span>
           </div>
           <div className="w-full bg-gray-100 rounded-full h-2 mt-3">
-            <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${progressPercent}%` }} />
+            <div className="bg-[var(--brand-primary)] h-2 rounded-full" style={{ width: `${progressPercent}%` }} />
           </div>
         </Card>
       )}

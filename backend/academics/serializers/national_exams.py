@@ -10,6 +10,7 @@ from ..models import (
 
 class NationalExamSessionSerializer(serializers.ModelSerializer):
     classroom_name = serializers.SerializerMethodField()
+    grade_level = serializers.SerializerMethodField()
     candidates_count = serializers.SerializerMethodField()
     registered_count = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
@@ -18,7 +19,7 @@ class NationalExamSessionSerializer(serializers.ModelSerializer):
         model = NationalExamSession
         fields = [
             'id', 'name', 'academic_year',
-            'classroom', 'classroom_name',
+            'classroom', 'classroom_name', 'grade_level',
             'centre_number', 'centre_name',
             'exam_date', 'is_results_entered',
             'notes', 'candidates_count',
@@ -30,6 +31,9 @@ class NationalExamSessionSerializer(serializers.ModelSerializer):
 
     def get_classroom_name(self, obj):
         return str(obj.classroom)
+
+    def get_grade_level(self, obj):
+        return obj.classroom.grade_level if obj.classroom else ''
 
     def get_candidates_count(self, obj):
         return obj.candidates.count()

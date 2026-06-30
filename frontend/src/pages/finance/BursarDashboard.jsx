@@ -150,7 +150,7 @@ export default function BursarDashboard() {
         )}
         <div className="flex items-center justify-between py-3 border-b bg-blue-50 px-3 rounded">
           <p className="text-sm font-semibold text-gray-900">Net Collectible</p>
-          <p className="text-lg font-bold text-blue-600">KES {(stats.expected - stats.waived).toLocaleString()}</p>
+          <p className="text-lg font-bold text-[var(--brand-primary)]">KES {(stats.expected - stats.waived).toLocaleString()}</p>
         </div>
         <div className="flex items-center justify-between py-3 border-b">
           <p className="text-sm text-gray-600">Collected</p>
@@ -165,7 +165,7 @@ export default function BursarDashboard() {
       {/* Quick Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="p-4 flex items-center gap-4">
-          <div className="p-3 bg-blue-50 rounded-lg"><DollarSign className="text-blue-600" /></div>
+          <div className="p-3 bg-[var(--brand-primary-light)] rounded-lg"><DollarSign className="text-[var(--brand-primary)]" /></div>
           <div>
             <p className="text-sm text-gray-500">Collected Today</p>
             <p className="text-xl font-bold">KES {stats.todayAmount.toLocaleString()}</p>
@@ -203,10 +203,10 @@ export default function BursarDashboard() {
       <Card className="p-5">
         <div className="flex justify-between mb-2">
           <h3 className="font-semibold text-gray-900">Term Collection Progress</h3>
-          <span className="text-sm font-medium text-blue-600">{progress}%</span>
+          <span className="text-sm font-medium text-[var(--brand-primary)]">{progress}%</span>
         </div>
         <div className="w-full bg-gray-100 rounded-full h-3">
-          <div className="bg-blue-600 h-3 rounded-full transition-all" style={{ width: `${progress}%` }} />
+          <div className="bg-[var(--brand-primary)] h-3 rounded-full transition-all" style={{ width: `${progress}%` }} />
         </div>
       </Card>
 

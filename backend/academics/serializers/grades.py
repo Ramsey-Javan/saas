@@ -141,6 +141,22 @@ class ExamSetupSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_by', 'created_at']
 
+    def validate(self, attrs):
+        if self.instance is None:  # creating new
+            request = self.context.get('request')
+            tenant = getattr(request.user, 'tenant', None) if request else None
+            if tenant and ExamSetup.objects.filter(
+                tenant=tenant,
+                name=attrs.get('name'),
+                classroom=attrs.get('classroom'),
+                term=attrs.get('term'),
+                academic_year=attrs.get('academic_year'),
+            ).exists():
+                raise serializers.ValidationError({
+                    'detail': 'An exam with this name already exists for this class, term and academic year.'
+                })
+        return attrs
+
     def get_classroom_name(self, obj):
         return str(obj.classroom)
 

@@ -174,7 +174,7 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
     <button
       type="button"
       onClick={() => { setActiveTab(value); setResult(null); setError('') }}
-      className={`px-3 py-2 text-sm rounded-lg font-medium ${activeTab === value ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+  className={`px-3 py-2 text-sm rounded-lg font-medium ${activeTab === value ? 'bg-[var(--brand-primary)] text-white' : 'bg-gray-100 text-gray-700'}`}
     >
       {label}
     </button>
@@ -233,7 +233,7 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Notes</label>
                   <textarea
-                    className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400"
+                    className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-[var(--brand-primary-ring)] focus:border-[var(--brand-primary)]"
                     placeholder="Optional"
                     rows={3}
                     value={cashNotes}
@@ -295,7 +295,7 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Notes</label>
                   <textarea
-                    className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400"
+                    className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-[var(--brand-primary-ring)] focus:border-[var(--brand-primary)]"
                     placeholder="Optional"
                     rows={3}
                     value={bankNotes}
@@ -356,7 +356,7 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Notes</label>
                   <textarea
-                    className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400"
+                    className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-[var(--brand-primary-ring)] focus:border-[var(--brand-primary)]"
                     placeholder="Optional"
                     rows={3}
                     value={chequeNotes}

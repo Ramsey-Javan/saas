@@ -59,7 +59,22 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         if _is_teacher(self.request.user):
-            qs = qs.filter(classroom_id__in=_teacher_classroom_ids(self.request.user))
+            # Teachers see sessions for classes they teach a subject in,
+            # AND classes where they are the homeroom (class_teacher) —
+            # a pure homeroom teacher with no subject assignment of their
+            # own should still see their own class's attendance sessions.
+            # Marking rights are enforced separately per session_type
+            # (see _check_attendance_permission below); this filter only
+            # controls visibility.
+            from students.models import Classroom
+
+            homeroom_ids = set(
+                Classroom.objects.filter(
+                    tenant=self.request.user.tenant, class_teacher=self.request.user
+                ).values_list('id', flat=True)
+            )
+            subject_ids = set(_teacher_classroom_ids(self.request.user))
+            qs = qs.filter(classroom_id__in=homeroom_ids | subject_ids)
         return qs
 
     def get_serializer_class(self):
@@ -72,39 +87,80 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             return [IsAdminUser()]
         return [IsTeacherOrAdmin()]
 
+    REGISTER_SESSION_TYPES = {'daily', 'morning', 'afternoon'}
+
+    def _check_attendance_permission(self, classroom, session_type, subject=None):
+        """
+        Enforce who may create/update/mark an attendance session:
+        - Register sessions (daily/morning/afternoon): only the homeroom
+          (class_teacher) for this classroom may act. This is the main
+          class register, not tied to any one subject.
+        - Lesson sessions: a subject teacher with a ClassSubjectAssignment
+          for this classroom (and, if provided, this subject) may act,
+          in addition to the homeroom teacher.
+        Admins bypass this entirely (not called for them — see callers).
+        """
+        if not _is_teacher(self.request.user):
+            return
+
+        user = self.request.user
+        is_homeroom = getattr(classroom, 'class_teacher', None) == user
+
+        if session_type in self.REGISTER_SESSION_TYPES:
+            if not is_homeroom:
+                raise PermissionDenied(
+                    'Only the class teacher can manage the daily register for this class.'
+                )
+            return
+
+        # session_type == 'lesson' (or any other non-register type)
+        if is_homeroom:
+            return
+        if classroom.id not in set(_teacher_classroom_ids(user)):
+            raise PermissionDenied(
+                'You can only manage lesson attendance for classes you teach.'
+            )
+        if subject is not None and subject.id not in set(_teacher_subject_ids(user)):
+            raise PermissionDenied(
+                'You can only manage lesson attendance for your assigned subjects.'
+            )
+
     def perform_create(self, serializer):
         classroom = serializer.validated_data['classroom']
         subject = serializer.validated_data.get('subject')
+        session_type = serializer.validated_data.get('session_type', AttendanceSession.SessionType.DAILY)
         if classroom.tenant_id != self.request.user.tenant_id:
             raise ValidationError('Classroom must belong to your school.')
         if subject and subject.tenant_id != self.request.user.tenant_id:
             raise ValidationError('Subject must belong to your school.')
-        if _is_teacher(self.request.user):
-            if classroom.id not in set(_teacher_classroom_ids(self.request.user)):
-                raise PermissionDenied('You can only create sessions for your assigned classes.')
-            if subject and subject.id not in set(_teacher_subject_ids(self.request.user)):
-                raise PermissionDenied('You can only create lesson sessions for your assigned subjects.')
+
+        self._check_attendance_permission(classroom, session_type, subject)
+
         serializer.save(tenant=self.request.user.tenant, teacher=self.request.user)
 
     def perform_update(self, serializer):
         classroom = serializer.validated_data.get('classroom', serializer.instance.classroom)
         subject = serializer.validated_data.get('subject', serializer.instance.subject)
+        session_type = serializer.validated_data.get('session_type', serializer.instance.session_type)
         if classroom.tenant_id != self.request.user.tenant_id:
             raise ValidationError('Classroom must belong to your school.')
         if subject and subject.tenant_id != self.request.user.tenant_id:
             raise ValidationError('Subject must belong to your school.')
-        if _is_teacher(self.request.user):
-            if classroom.id not in set(_teacher_classroom_ids(self.request.user)):
-                raise PermissionDenied('You can only update sessions for your assigned classes.')
-            if subject and subject.id not in set(_teacher_subject_ids(self.request.user)):
-                raise PermissionDenied('You can only update lesson sessions for your assigned subjects.')
+
+        self._check_attendance_permission(classroom, session_type, subject)
+
         serializer.save(tenant=self.request.user.tenant)
 
     @action(detail=True, methods=['post'], url_path='mark')
     def mark(self, request, pk=None):
         session = self.get_object()
         if session.is_locked:
-            return Response({'error': 'Session is locked and cannot be edited.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'error': 'Session is locked and cannot be edited.'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        self._check_attendance_permission(session.classroom, session.session_type, session.subject)
 
         serializer = MarkAttendanceSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -143,8 +199,8 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                     updated += 1
 
         return Response({'created': created, 'updated': updated, 'errors': errors, 'session_id': session.id})
-
     @action(detail=True, methods=['patch'], permission_classes=[IsAdminUser], url_path='lock')
+
     def lock(self, request, pk=None):
         session = self.get_object()
         session.is_locked = True

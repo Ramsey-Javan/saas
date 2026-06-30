@@ -158,7 +158,7 @@ export default function AttendanceDashboard() {
       )}
       <Card className="p-2">
         <div className="flex gap-2">
-          {['today', 'week', 'history'].map(name => <button key={name} onClick={() => setTab(name)} className={`rounded-lg px-4 py-2 text-sm font-medium capitalize ${tab === name ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{name === 'week' ? 'This Week' : name}</button>)}
+          {['today', 'week', 'history'].map(name => <button key={name} onClick={() => setTab(name)} className={`rounded-lg px-4 py-2 text-sm font-medium capitalize ${tab === name ? 'bg-[var(--brand-primary)] text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{name === 'week' ? 'This Week' : name}</button>)}
         </div>
       </Card>
       {tab === 'history' && (

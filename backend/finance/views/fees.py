@@ -87,6 +87,13 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['post'], permission_classes=[IsAdminOrBursar])
     def generate_bulk(self, request):
+        from decimal import Decimal
+        from django.utils.dateparse import parse_date
+        from django.db import transaction
+        from students.models import Student, Classroom
+        from finance.models import FeeStructure, StudentFee
+        from finance.utils import get_carry_forward, calculate_waived_amount, get_sibling_discount, recalculate_student_fees
+
         classroom_id = request.data.get('classroom')
         term = request.data.get('term')
         academic_year = request.data.get('academic_year')
@@ -118,16 +125,6 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
         except FeeStructure.DoesNotExist:
             return Response({'error': 'Active fee structure not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # NOTE: we intentionally do NOT bail out here just because some invoices
-        # already exist for this fee structure. The creation loop below uses
-        # get_or_create() per student, which is already safe to re-run: existing
-        # students' invoices are left untouched, and only students who don't yet
-        # have an invoice for this term (e.g. admitted mid-term, after the class
-        # was first billed) get one created. Blocking re-runs entirely meant a
-        # student added after the initial "Generate Invoices" click could never
-        # be billed through this endpoint -- their balance simply showed as 0
-        # because no StudentFee row existed for them at all.
-
         invoice_due_date = due_date or structure.due_date
         if not invoice_due_date:
             return Response(
@@ -146,7 +143,6 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
 
         with transaction.atomic():
             for student in students:
-                # Recalculate all previous invoices first to ensure fresh data
                 previous_fees = StudentFee.objects.select_related('fee_structure').filter(
                     tenant=tenant,
                     student=student,
@@ -157,11 +153,8 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
                 for previous_fee in previous_fees:
                     _recalculate_invoice(previous_fee)
 
-                # Now use the live cascade function which handles CF correctly
-                from ..utils import recalculate_student_fees
                 recalculate_student_fees(student)
 
-                # Get the correct CF for the NEW invoice
                 carried_forward = get_carry_forward(student, term, academic_year)
 
                 if structure.base_amount + carried_forward < Decimal('0.00'):
@@ -196,9 +189,7 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
                 else:
                     skipped_count += 1
 
-            # Final pass: ensure all students' invoice chains are consistent
             for student in students:
-                from ..utils import recalculate_student_fees
                 recalculate_student_fees(student)
 
         if created_count == 0 and skipped_count > 0:
@@ -214,6 +205,25 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
         else:
             message = f'Generated {created_count} invoice(s).'
 
+        # Log bulk invoice generation
+        from activity.utils import log_activity
+        from activity.models import ActivityLog
+
+        log_activity(
+            tenant=tenant,
+            activity_type=ActivityLog.ActivityType.INVOICE_BULK_GENERATED,
+            title="Bulk invoices generated",
+            description=message,
+            actor=request.user,
+            metadata={
+                'created_count': created_count,
+                'skipped_count': skipped_count,
+                'classroom': classroom.name,
+                'term': term,
+                'academic_year': academic_year,
+            },
+        )
+
         return Response(
             {
                 'message': message,
@@ -222,7 +232,7 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
-
+    
     @action(detail=False, methods=['get'], permission_classes=[IsAdminOrBursar])
     def defaulters(self, request):
         # Per-row check: each invoice's OWN outstanding balance (including its

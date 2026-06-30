@@ -158,10 +158,10 @@ export default function BulkImportPage() {
             </div>
 
             {file && (
-              <div className="mt-4 flex items-center justify-between p-3 bg-blue-50 rounded-lg">
+              <div className="mt-4 flex items-center justify-between p-3 bg-[var(--brand-primary-light)] rounded-lg">
                 <div className="flex items-center gap-2">
-                  <Upload size={16} className="text-blue-600" />
-                  <span className="text-sm text-blue-900">{file.name}</span>
+                  <Upload size={16} className="text-[var(--brand-primary)]" />
+                  <span className="text-sm text-[var(--brand-primary)]">{file.name}</span>
                 </div>
                 <button
                   onClick={() => {
@@ -169,7 +169,7 @@ export default function BulkImportPage() {
                     setResult(null)
                     setError('')
                   }}
-                  className="text-xs text-blue-600 hover:underline"
+                  className="text-xs text-[var(--brand-primary)] hover:underline"
                 >
                   Remove
                 </button>

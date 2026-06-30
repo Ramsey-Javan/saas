@@ -4,18 +4,26 @@ import {
   GraduationCap, Users, DollarSign, BookOpen,
   MessageSquare, LayoutDashboard, LogOut,
   Menu, ChevronRight, Settings, AlertCircle, FilePlus,
-  CheckSquare, FileText, Calendar, ClipboardList, Award,
+  CheckSquare, FileText, Calendar, ClipboardList, Award, Globe,
+  Search, Command, Crown
 } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { cn } from '@/lib/utils'
 import { financeApi } from '@/api/finance'
+import { studentsApi } from '@/api/students'
 import NotificationBell from '@/components/layout/NotificationBell'
+import TrialBanner from '@/components/layout/TrialBanner'
+import CommandPalette from '@/components/command-palette/CommandPalette'
+import { useCommandPalette } from '@/components/command-palette/useCommandPalette'
+
+const SEARCH_ALLOWED_ROLES = ['admin', 'superadmin']
 
 // Navigation items per role
 const NAV_ITEMS = {
   admin: [
     { label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
     { label: 'Students', icon: Users, href: '/students' },
+    { label: 'Staff', icon: Users, href: '/staff' },
     { label: 'Finance', icon: DollarSign, href: '/finance' },
     { label: 'Pending Cheques', icon: AlertCircle, href: '/finance/cheques', badgeKey: 'pendingCheques' },
     { label: 'Waivers Dashboard', icon: FilePlus, href: '/finance/waivers-dashboard' },
@@ -23,10 +31,10 @@ const NAV_ITEMS = {
     { label: 'Exams', icon: ClipboardList, href: '/academics/exams' },
     { label: 'National Exams', icon: Award, href: '/academics/national-exams' },
     { label: 'Communication', icon: MessageSquare, href: '/communication' },
-    { label: 'Settings', icon: Settings, href: '/settings' },
+    { label: 'Settings', icon: Settings, href: '/settings/school-profile' },
   ],
   superadmin: [
-    { label: 'Platform', icon: LayoutDashboard, href: '/platform' },
+    { label: 'Platform', icon: Globe, href: '/platform' },
     { label: 'Schools', icon: GraduationCap, href: '/platform/schools' },
   ],
   teacher: [
@@ -58,7 +66,13 @@ const NAV_ITEMS = {
   ],
 }
 
-function NavItem({ item, collapsed }) {
+// Inserted right after "Students" in the teacher nav when applicable —
+// not part of the static NAV_ITEMS.teacher array because its visibility
+// depends on a runtime check (is this teacher homeroom for any class),
+// not just their role.
+const HOME_CLASS_ITEM = { label: 'Home Class', icon: Crown, href: '/teacher/home-class' }
+
+function NavItem({ item, collapsed, badge }) {
   return (
     <NavLink
       to={item.href}
@@ -66,15 +80,15 @@ function NavItem({ item, collapsed }) {
       className={({ isActive }) => cn(
         'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all group',
         isActive
-          ? 'bg-blue-600 text-white'
+          ? 'bg-[var(--brand-primary)] text-white'
           : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
       )}
     >
       <item.icon size={18} className="flex-shrink-0" />
       {!collapsed && <span className="font-medium">{item.label}</span>}
-      {!collapsed && item.badge > 0 && (
+      {!collapsed && badge > 0 && (
         <span className="ml-auto bg-red-100 text-red-700 text-xs font-semibold px-2 py-0.5 rounded-full">
-          {item.badge}
+          {badge}
         </span>
       )}
     </NavLink>
@@ -87,6 +101,10 @@ export default function AppShell({ children }) {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [pendingChequesCount, setPendingChequesCount] = useState(0)
+  const [isHomeroomTeacher, setIsHomeroomTeacher] = useState(false)
+  const { open: paletteOpen, setOpen: setPaletteOpen } = useCommandPalette()
+
+  const canSearch = SEARCH_ALLOWED_ROLES.includes(user?.role)
 
   useEffect(() => {
     if (!user || !['admin', 'superadmin', 'bursar'].includes(user.role)) {
@@ -100,12 +118,41 @@ export default function AppShell({ children }) {
     }).catch(() => setPendingChequesCount(0))
   }, [user])
 
-  const navItems = (NAV_ITEMS[user?.role] || []).map(item => ({
-    ...item,
-    badge: item.badgeKey === 'pendingCheques' ? pendingChequesCount : 0,
-  }))
+  useEffect(() => {
+    if (user?.role !== 'teacher') {
+      setIsHomeroomTeacher(false)
+      return
+    }
+    studentsApi.getClassrooms({ class_teacher: user.id })
+      .then(r => {
+        const list = r.data?.results || (Array.isArray(r.data) ? r.data : [])
+        setIsHomeroomTeacher(list.length > 0)
+      })
+      .catch(() => setIsHomeroomTeacher(false))
+  }, [user])
+
+  // Force-close the palette if it's somehow open for a non-admin (e.g. a
+  // role change mid-session via the Edit Staff role-change flow we built
+  // earlier) — belt and suspenders alongside not rendering the trigger or
+  // mounting the component below at all for non-admins.
+  useEffect(() => {
+    if (!canSearch && paletteOpen) {
+      setPaletteOpen(false)
+    }
+  }, [canSearch, paletteOpen, setPaletteOpen])
+
+  const baseNavItems = NAV_ITEMS[user?.role] || NAV_ITEMS.admin
+  const navItems = (user?.role === 'teacher' && isHomeroomTeacher)
+    ? (() => {
+        const studentsIndex = baseNavItems.findIndex(item => item.href === '/students')
+        if (studentsIndex === -1) return [...baseNavItems, HOME_CLASS_ITEM]
+        const next = [...baseNavItems]
+        next.splice(studentsIndex + 1, 0, HOME_CLASS_ITEM)
+        return next
+      })()
+    : baseNavItems
+
   const schoolName = school?.name || 'School Management'
-  const primaryColor = school?.primary_color || '#2563eb'
 
   const handleLogout = () => {
     logout()
@@ -118,7 +165,7 @@ export default function AppShell({ children }) {
       <div className="flex items-center gap-3 px-4 py-5 border-b border-gray-100">
         <div
           className="h-8 w-8 rounded-lg flex items-center justify-center flex-shrink-0"
-          style={{ backgroundColor: primaryColor }}
+          style={{ backgroundColor: 'var(--brand-primary)' }}
         >
           <GraduationCap size={16} className="text-white" />
         </div>
@@ -130,7 +177,12 @@ export default function AppShell({ children }) {
       {/* Nav */}
       <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
         {navItems.map((item) => (
-          <NavItem key={item.href} item={item} collapsed={collapsed} />
+          <NavItem
+            key={item.href}
+            item={item}
+            collapsed={collapsed}
+            badge={item.badgeKey === 'pendingCheques' ? pendingChequesCount : 0}
+          />
         ))}
       </nav>
 
@@ -157,6 +209,10 @@ export default function AppShell({ children }) {
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
+      {/* Command Palette — admin/superadmin only. Not mounted at all for
+          other roles, so there's no hidden data-fetching or keyboard
+          shortcut surface for them even if someone tried to force it open. */}
+      {canSearch && <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />}
 
       {/* Desktop sidebar */}
       <aside className={cn(
@@ -186,6 +242,8 @@ export default function AppShell({ children }) {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <TrialBanner />
+
         {/* Mobile top bar */}
         <header className="lg:hidden flex items-center justify-between px-4 py-3 bg-white border-b border-gray-100">
           <button onClick={() => setMobileOpen(true)} className="p-1.5 rounded-lg hover:bg-gray-100">
@@ -195,8 +253,24 @@ export default function AppShell({ children }) {
           <NotificationBell />
         </header>
 
-        {/* Desktop header */}
-        <header className="hidden lg:flex items-center justify-end px-6 py-3 bg-white border-b border-gray-100">
+        {/* Desktop header with search */}
+        <header className="hidden lg:flex items-center justify-between px-6 py-3 bg-white border-b border-gray-100">
+          <div className="flex items-center gap-4 flex-1">
+            {/* Global Search Trigger — admin/superadmin only */}
+            {canSearch && (
+              <button
+                onClick={() => setPaletteOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors w-full max-w-md"
+                type="button"
+              >
+                <Search size={16} />
+                <span className="flex-1 text-left">Search students, staff, pages...</span>
+                <kbd className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white border border-gray-200 text-xs text-gray-400 font-mono">
+                  <Command size={10} />K
+                </kbd>
+              </button>
+            )}
+          </div>
           <NotificationBell />
         </header>
 

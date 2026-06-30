@@ -190,7 +190,7 @@ export default function WaiversReportPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card>
           <div className="text-center">
-            <div className="text-4xl font-bold text-blue-600">{summary.total_students_with_waivers || 0}</div>
+            <div className="text-4xl font-bold text-[var(--brand-primary)]">{summary.total_students_with_waivers || 0}</div>
             <div className="text-gray-600 mt-2">Students with Active Waivers</div>
           </div>
         </Card>
@@ -217,7 +217,7 @@ export default function WaiversReportPage() {
               onClick={() => setActiveTab(tab.id)}
               className={`px-4 py-3 font-medium whitespace-nowrap border-b-2 transition-colors ${
                 activeTab === tab.id
-                  ? 'text-blue-600 border-blue-600'
+                  ? 'text-[var(--brand-primary)] border-[var(--brand-primary)]'
                   : 'text-gray-600 border-transparent hover:text-gray-900'
               }`}
             >

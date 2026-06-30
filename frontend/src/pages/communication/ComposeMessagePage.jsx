@@ -10,6 +10,13 @@ import {
 } from './shared'
 import { useAuthStore } from '@/store/authStore'
 
+// Kept in sync with communication.views.TEACHER_ALLOWED_CHANNELS on the
+// backend. This is a UX convenience (hide what they can't use) — the
+// backend independently rejects disallowed channels regardless of what
+// the frontend sends, so this list drifting out of sync is a UX
+// annoyance, not a security gap.
+const TEACHER_ALLOWED_CHANNEL_IDS = ['inapp', 'whatsapp']
+
 export default function ComposeMessagePage() {
   const navigate = useNavigate()
   const { user } = useAuthStore()
@@ -17,18 +24,25 @@ export default function ComposeMessagePage() {
   const recipientOptions = isTeacher
     ? RECIPIENT_TYPES.filter(r => ['class', 'individual'].includes(r.value))
     : RECIPIENT_TYPES
+  const channelOptions = isTeacher
+    ? CHANNELS.filter(ch => TEACHER_ALLOWED_CHANNEL_IDS.includes(ch.id))
+    : CHANNELS
 
   const [tab, setTab] = useState('freeform')
   const [templates, setTemplates] = useState([])
+  const [templatesError, setTemplatesError] = useState('')
   const [classrooms, setClassrooms] = useState([])
   const [users, setUsers] = useState([])
   const [saving, setSaving] = useState(false)
+  const [submitError, setSubmitError] = useState('')
 
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [selectedTemplate, setSelectedTemplate] = useState('')
   const [templateVars, setTemplateVars] = useState({})
-  const [channels, setChannels] = useState(['sms'])
+  // Teachers default to a channel they're actually allowed to use, rather
+  // than inheriting the admin default of 'sms'.
+  const [channels, setChannels] = useState(isTeacher ? ['inapp'] : ['sms'])
   const [recipientType, setRecipientType] = useState('class')
   const [recipientClass, setRecipientClass] = useState('')
   const [recipientGrade, setRecipientGrade] = useState('')
@@ -42,10 +56,27 @@ export default function ComposeMessagePage() {
   const [recipientCount, setRecipientCount] = useState(null)
 
   useEffect(() => {
-    communicationApi.getTemplates({ is_active: true }).then(r => setTemplates(listFromResponse(r.data)))
-    studentsApi.getClassrooms({ is_active: true }).then(r => setClassrooms(listFromResponse(r.data)))
-    api.get('/auth/users/').then(r => setUsers(listFromResponse(r.data))).catch(() => {})
-  }, [])
+    communicationApi.getTemplates({ is_active: true })
+      .then(r => setTemplates(listFromResponse(r.data)))
+      .catch(err => {
+        console.error('Failed to load templates:', err)
+        setTemplatesError('Could not load message templates. Try refreshing the page.')
+      })
+
+    // Teachers only ever see/choose their own homeroom class, so we don't
+    // need every classroom in the school for them — only admins need the
+    // full list. is_class_teacher relies on the classroom serializer
+    // exposing class_teacher (it already includes class_teacher as an id
+    // field); we compare it to the logged-in user's id client-side.
+    studentsApi.getClassrooms({ is_active: true }).then(r => {
+      const all = listFromResponse(r.data)
+      setClassrooms(isTeacher ? all.filter(c => String(c.class_teacher) === String(user?.id)) : all)
+    })
+
+    if (!isTeacher) {
+      api.get('/auth/users/').then(r => setUsers(listFromResponse(r.data))).catch(() => {})
+    }
+  }, [isTeacher, user?.id])
 
   const activeTemplate = templates.find(t => String(t.id) === String(selectedTemplate))
   const templateVariables = useMemo(
@@ -89,6 +120,7 @@ export default function ComposeMessagePage() {
   }, [recipientType, recipientClass, recipientGrade, recipientUser, users])
 
   const toggleChannel = (id) => {
+    if (!channelOptions.some(ch => ch.id === id)) return
     setChannels(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id])
   }
 
@@ -111,6 +143,7 @@ export default function ComposeMessagePage() {
   const handleSave = async (send = false) => {
     if (!channels.length) return
     setSaving(true)
+    setSubmitError('')
     try {
       const res = await communicationApi.createAnnouncement(buildPayload())
       if (send) {
@@ -119,6 +152,11 @@ export default function ComposeMessagePage() {
       navigate('/communication')
     } catch (err) {
       console.error(err)
+      const data = err.response?.data
+      const msg = data?.channels?.[0] || data?.detail ||
+        Object.values(data || {})[0]?.[0] ||
+        'Failed to send message. Please try again.'
+      setSubmitError(msg)
     } finally {
       setSaving(false)
     }
@@ -137,13 +175,19 @@ export default function ComposeMessagePage() {
         <p className="mt-1 text-sm text-gray-500">Create and send announcements across multiple channels</p>
       </div>
 
+      {submitError && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {submitError}
+        </div>
+      )}
+
       <div className="mb-4 flex gap-2">
         {['freeform', 'template'].map(t => (
           <button
             key={t}
             type="button"
             onClick={() => setTab(t)}
-            className={`rounded-lg px-4 py-2 text-sm font-medium ${tab === t ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200'}`}
+            className={`rounded-lg px-4 py-2 text-sm font-medium ${tab === t ? 'bg-[var(--brand-primary)] text-white' : 'bg-white text-gray-600 border border-gray-200'}`}
           >
             {t === 'freeform' ? 'Free-form' : 'Use Template'}
           </button>
@@ -161,25 +205,38 @@ export default function ComposeMessagePage() {
                   value={body}
                   onChange={e => setBody(e.target.value)}
                   rows={6}
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-[var(--brand-primary)] focus:outline-none"
                 />
                 <p className="mt-1 text-xs text-gray-400">{body.length} chars · {Math.ceil(body.length / 160) || 1} SMS segment(s)</p>
               </div>
             </Card>
           ) : (
             <Card className="space-y-4 p-5">
+              {templatesError && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                  {templatesError}
+                </div>
+              )}
               <Select
                 label="Template"
                 value={selectedTemplate}
                 onChange={e => { setSelectedTemplate(e.target.value); setTemplateVars({}) }}
               >
-                <option value="">Select template...</option>
+                <option value="">
+                  {templates.length === 0 ? 'No templates available yet' : 'Select template...'}
+                </option>
                 {templates.map(t => (
                   <option key={t.id} value={t.id}>
                     {`${TEMPLATE_CATEGORIES.find(c => c.value === t.category)?.label || t.category} — ${t.name}`}
                   </option>
                 ))}
               </Select>
+              {templates.length === 0 && !templatesError && (
+                <p className="text-xs text-gray-400">
+                  No message templates have been created for this school yet.
+                  {!isTeacher && ' Create one from the Templates page.'}
+                </p>
+              )}
               {activeTemplate && (
                 <>
                   <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700 whitespace-pre-wrap">{activeTemplate.body}</div>
@@ -199,18 +256,23 @@ export default function ComposeMessagePage() {
           <Card className="p-5">
             <h3 className="mb-3 font-medium text-gray-900">Channels</h3>
             <div className="flex flex-wrap gap-2">
-              {CHANNELS.map(ch => (
+              {channelOptions.map(ch => (
                 <button
                   key={ch.id}
                   type="button"
                   onClick={() => toggleChannel(ch.id)}
-                  className={`rounded-lg border px-4 py-2 text-sm ${channels.includes(ch.id) ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600'}`}
+                  className={`rounded-lg border px-4 py-2 text-sm ${channels.includes(ch.id) ? 'border-[var(--brand-primary)] bg-[var(--brand-primary-light)] text-[var(--brand-primary)]' : 'border-gray-200 text-gray-600'}`}
                 >
                   {ch.label}
                   <span className="ml-1 text-xs text-gray-400">({ch.cost})</span>
                 </button>
               ))}
             </div>
+            {isTeacher && (
+              <p className="mt-2 text-xs text-gray-400">
+                SMS and Email are reserved for school administration.
+              </p>
+            )}
           </Card>
 
           <Card className="space-y-4 p-5">
@@ -221,7 +283,7 @@ export default function ComposeMessagePage() {
                   key={r.value}
                   type="button"
                   onClick={() => setRecipientType(r.value)}
-                  className={`rounded-lg border px-3 py-1.5 text-sm ${recipientType === r.value ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600'}`}
+                  className={`rounded-lg border px-3 py-1.5 text-sm ${recipientType === r.value ? 'border-[var(--brand-primary)] bg-[var(--brand-primary-light)] text-[var(--brand-primary)]' : 'border-gray-200 text-gray-600'}`}
                 >
                   {r.label}
                 </button>
@@ -229,7 +291,9 @@ export default function ComposeMessagePage() {
             </div>
             {recipientType === 'class' && (
               <Select label="Classroom" value={recipientClass} onChange={e => setRecipientClass(e.target.value)}>
-                <option value="">Select class...</option>
+                <option value="">
+                  {isTeacher && classrooms.length === 0 ? 'You are not set as homeroom teacher for any class' : 'Select class...'}
+                </option>
                 {classrooms.map(c => (
                   <option key={c.id} value={c.id}>{`${c.name}${c.stream ? ` ${c.stream}` : ''}`}</option>
                 ))}
@@ -255,7 +319,7 @@ export default function ComposeMessagePage() {
               </div>
             )}
             {recipientCount != null && recipientCount > 0 && (
-              <p className="text-sm text-blue-600">Send to ~{recipientCount} recipient{recipientCount !== 1 ? 's' : ''}</p>
+              <p className="text-sm text-[var(--brand-primary)]">Send to ~{recipientCount} recipient{recipientCount !== 1 ? 's' : ''}</p>
             )}
           </Card>
 
