@@ -162,7 +162,7 @@ export default function WaiverStudentsModal({ isOpen, onClose, policy, onUpdate 
                             href={waiver.supporting_document}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-2 text-xs text-blue-600 hover:text-blue-900"
+                            className="inline-flex items-center gap-2 text-xs text-[var(--brand-primary)] hover:opacity-80"
                           >
                             <FileText size={14} />
                             View Document

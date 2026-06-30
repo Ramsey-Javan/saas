@@ -8,7 +8,7 @@ const Input = forwardRef(function Input({ label, error, className = '', ...props
       <input
         ref={ref}
         className={cn(
-          'w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400',
+          'w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-[var(--brand-primary-ring)] focus:border-[var(--brand-primary)]',
           error && 'border-red-300 focus:ring-red-200',
           className
         )}

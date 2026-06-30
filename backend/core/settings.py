@@ -11,7 +11,7 @@ SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-secret-key')
 
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-_allowed = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,0.0.0.0,::1')
+_allowed = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,0.0.0.0,::1') 
 ALLOWED_HOSTS = [host.strip() for host in _allowed.split(',') if host.strip()]
 
 # DebugLine (What django actualy sees remove in production )
@@ -35,7 +35,9 @@ INSTALLED_APPS = [
     'finance',
     'academics.apps.AcademicsConfig',
     'communication.apps.CommunicationConfig',
-]
+    'activity',
+    'dashboard.apps.DashboardConfig',
+    ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -124,6 +126,10 @@ CELERY_BEAT_SCHEDULE = {
     'process-recurring-announcements': {
         'task': 'communication.tasks.process_recurring_task',
         'schedule': crontab(minute=0),
+    },
+    'check-trial-expiry': {
+        'task': 'tenants.tasks.check_trial_expiry_task',
+        'schedule': crontab(hour=1, minute=0),
     },
 }
 

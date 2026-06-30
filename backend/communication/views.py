@@ -12,7 +12,7 @@ from rest_framework.views import APIView
 
 from academics.permissions import IsAdminUser, IsTeacherOrAdmin
 from academics.views.mixins import TenantScopedMixin
-from academics.models import ClassSubjectAssignment
+from students.models import Classroom
 
 from .models import Announcement, InAppNotification, MessageLog, MessageTemplate, Notification, PushSubscription, SMSLog
 from .serializers import (
@@ -26,9 +26,21 @@ from .serializers import (
 )
 from .tasks import calculate_next_run
 
+# Channels a teacher is allowed to send on. Admins/superadmins are not
+# restricted. SMS is excluded because it carries a direct per-message cost
+# via Africa's Talking, and Email is excluded to keep teacher-initiated
+# comms inside channels the school can audit/cap easily (in-app + WhatsApp).
+# NOTE: there is currently no dedicated "class_teacher" role on CustomUser
+# (per Javan: homeroom/class_teacher wiring is planned for a later pass).
+# This scoping is written against Classroom.class_teacher directly so it
+# keeps working once that role/relationship is fleshed out further — no
+# rework needed here.
+TEACHER_ALLOWED_CHANNELS = {'inapp', 'whatsapp'}
 
-def _teacher_classroom_ids(user):
-    return set(ClassSubjectAssignment.objects.filter(tenant=user.tenant, teacher=user).values_list('classroom_id', flat=True))
+
+def _teacher_homeroom_classroom_ids(user):
+    """Classrooms where this user is the homeroom (class_teacher)."""
+    return set(Classroom.objects.filter(tenant=user.tenant, class_teacher=user).values_list('id', flat=True))
 
 
 class MessageTemplateViewSet(TenantScopedMixin, viewsets.ModelViewSet):
@@ -62,16 +74,42 @@ class AnnouncementViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     def get_permissions(self):
         return [IsTeacherOrAdmin()]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if user.role == 'teacher':
+            # Teachers only see announcements they themselves created/sent —
+            # not the school-wide list. Admins/superadmins see everything
+            # in the tenant (already enforced by TenantScopedMixin).
+            qs = qs.filter(sent_by=user)
+        return qs
+
     def perform_create(self, serializer):
         user = self.request.user
         recipient_type = serializer.validated_data.get('recipient_type')
         recipient_class = serializer.validated_data.get('recipient_class')
+        channels = serializer.validated_data.get('channels') or []
+
         if user.role == 'teacher':
             if recipient_type not in ['class', 'individual']:
                 raise ValidationError('Teachers can only send to their own class or individuals.')
-            if recipient_type == 'class' and recipient_class and recipient_class.id not in _teacher_classroom_ids(user):
-                raise PermissionDenied('You can only send to your assigned classes.')
-        serializer.save(tenant=user.tenant)
+            if recipient_type == 'class':
+                if not recipient_class or recipient_class.id not in _teacher_homeroom_classroom_ids(user):
+                    raise PermissionDenied('You can only send to a class where you are the homeroom (class) teacher.')
+
+            disallowed = sorted(set(channels) - TEACHER_ALLOWED_CHANNELS)
+            if disallowed:
+                raise ValidationError({
+                    'channels': (
+                        f'Teachers can only send via {", ".join(sorted(TEACHER_ALLOWED_CHANNELS))}. '
+                        f'Not allowed: {", ".join(disallowed)}.'
+                    )
+                })
+
+        # perform_create runs after sent_by would normally be set on send();
+        # we stamp it at creation time too so a teacher's own drafts are
+        # immediately visible in their own scoped queryset above.
+        serializer.save(tenant=user.tenant, sent_by=user if user.role == 'teacher' else None)
 
     @action(detail=True, methods=['post'], url_path='send')
     def send(self, request, pk=None):

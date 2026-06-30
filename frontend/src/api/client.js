@@ -1,50 +1,37 @@
 import axios from 'axios'
 import { useAuthStore } from '@/store/authStore'
 
-/**
- * Determines the API base URL from the current subdomain 
- * 
- * In production:
- *    stmarys.myapp.co.ke -> https://stmarys.myapp.co.ke/api
- * 
- * In local dev:
- *    localhost:3000 -> http://localhost:8000/api (via Vite proxy)
- */
-
 function getBaseURL() {
   const hostname = window.location.hostname
 
-  if (hostname === 'localhost' || hostname === '127.0.0.1' ) {
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
     return '/api'
-  } 
+  }
 
-  // extract sub domains for production 
   const parts = hostname.split('.')
   if (parts.length >= 3) {
     return `https://${hostname}/api`
   }
 
-  return '/api' // default fallback
+  return '/api'
 }
 
 const api = axios.create({
   baseURL: getBaseURL(),
   headers: { 'Content-Type': 'application/json' },
-  withCredentials: true, // include cookies for authentication
+  withCredentials: true,
 })
 
-// __ Request interceptor: attach JWT Access token ________________________
 api.interceptors.request.use(config => {
-  const token = localStorage.getItem('access_token')
+  const token = useAuthStore.getState().accessToken
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  config.headers['Cache-Control'] = 'no-cache'
   return config
-}, 
+},
   (error) => Promise.reject(error)
 )
-
-// ____ Response interceptor: auto-refresh on 401 ________________________
 
 let isRefreshing = false
 let refreshQueue = []
@@ -56,7 +43,6 @@ api.interceptors.response.use(
 
     if (error.response?.status === 401 && !original._retry) {
       if (isRefreshing) {
-        // Queue requests while refreshing
         return new Promise((resolve, reject) => {
           refreshQueue.push({ resolve, reject })
         }).then((token) => {
@@ -68,7 +54,7 @@ api.interceptors.response.use(
       original._retry = true
       isRefreshing = true
 
-      const refreshToken = localStorage.getItem('refresh_token')
+      const refreshToken = useAuthStore.getState().refreshToken
       if (!refreshToken) {
         useAuthStore.getState().logout()
         return Promise.reject(error)
@@ -80,7 +66,13 @@ api.interceptors.response.use(
         })
 
         const newAccess = data.access
-        localStorage.setItem('access_token', newAccess)
+        // Use setAccessToken, NOT setAuth, here. setAuth(user, newAccess,
+        // refreshToken) with no 4th arg defaults `tenant` to null, which
+        // was wiping `school` (and therefore all branding) back to
+        // defaults on every silent refresh -- this was the root cause of
+        // theming "resetting after some time." setAccessToken only ever
+        // touches the access token.
+        useAuthStore.getState().setAccessToken(newAccess)
 
         refreshQueue.forEach(({ resolve }) => resolve(newAccess))
         refreshQueue = []

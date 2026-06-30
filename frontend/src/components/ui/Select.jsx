@@ -8,7 +8,7 @@ const Select = forwardRef(function Select({ label, error, className = '', childr
       <select
         ref={ref}
         className={cn(
-          'w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 bg-white',
+          'w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-[var(--brand-primary-ring)] focus:border-[var(--brand-primary)] bg-white',
           error && 'border-red-300 focus:ring-red-200',
           className
         )}

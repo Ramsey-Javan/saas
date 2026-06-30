@@ -71,7 +71,7 @@ export default function StudentIdCardPage() {
 
       <Card className="p-6 no-print mb-5">
         <h1 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-          <CreditCard size={18} className="text-blue-600" /> Student ID Card
+          <CreditCard size={18} className="text-[var(--brand-primary)]" /> Student ID Card
         </h1>
         <p className="text-sm text-gray-500 mt-1">
           Print this card or save it as PDF from the print dialog.
@@ -80,7 +80,7 @@ export default function StudentIdCardPage() {
 
       <div id="student-id-print" className="flex justify-center">
         <div className="w-[340px] rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-          <div className="bg-blue-700 px-5 py-4 text-white">
+          <div className="bg-[var(--brand-primary)] px-5 py-4 text-white">
             <p className="text-xs uppercase tracking-wide opacity-80">Student Identification</p>
             <h2 className="text-lg font-bold">School ID Card</h2>
           </div>

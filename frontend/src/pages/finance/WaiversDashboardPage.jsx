@@ -134,15 +134,15 @@ export default function WaiversDashboardPage() {
                   </p>
                 </div>
 
-                <div className="p-3 bg-blue-50 rounded-lg">
-                  <p className="text-sm text-blue-600">Students Assigned</p>
-                  <p className="text-2xl font-bold text-blue-900">
+                <div className="p-3 bg-[var(--brand-primary-light)] rounded-lg">
+                  <p className="text-sm text-[var(--brand-primary)]">Students Assigned</p>
+                  <p className="text-2xl font-bold text-[var(--brand-primary)]">
                     {policy.student_count || 0}
                   </p>
                 </div>
               </div>
 
-              <button className="w-full mt-4 px-4 py-2 flex items-center justify-between text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+              <button className="w-full mt-4 px-4 py-2 flex items-center justify-between text-sm font-medium text-[var(--brand-primary)] hover:bg-[var(--brand-primary-light)] rounded-lg transition-colors">
                 <span>View Students</span>
                 <ChevronRight className="w-4 h-4" />
               </button>

@@ -307,7 +307,7 @@ export default function WaiverPoliciesPage() {
                     <td className="px-6 py-4 text-right text-sm space-x-2">
                       <button
                         onClick={() => handleEdit(policy)}
-                        className="text-blue-600 hover:text-blue-900 font-medium"
+                        className="text-[var(--brand-primary)] hover:opacity-80 font-medium"
                       >
                         Edit
                       </button>

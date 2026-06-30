@@ -3,7 +3,7 @@ import { Loader2 } from 'lucide-react'
 
 export default function Button({ children, variant = 'primary', size = 'md', loading = false, className = '', ...props }) {
   const variants = {
-    primary: 'bg-blue-600 text-white hover:bg-blue-700',
+    primary: 'bg-[var(--brand-primary)] text-white hover:bg-[var(--brand-primary-hover)]',
     secondary: 'bg-gray-100 text-gray-700 hover:bg-gray-200',
     danger: 'bg-red-600 text-white hover:bg-red-700',
   }

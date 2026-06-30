@@ -5,10 +5,13 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from tenants.views import PublicTenantInfoView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/tenant-info/', PublicTenantInfoView.as_view(), name='tenant-info'),
     path('api/auth/', include('accounts.urls')),
+    path('api/platform/', include('tenants.urls')),
     path('api/tenants/', include('tenants.urls')),
     path('api/students/', include('students.urls')),
     path('api/finance/', include('finance.urls')),

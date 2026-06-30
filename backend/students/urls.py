@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     ClassroomListCreateView, ClassroomDetailView, ClassroomStudentsView,
+    AssignClassTeacherView, UnassignClassTeacherView,
     GuardianListCreateView, GuardianDetailView,
     StudentListCreateView, StudentDetailView,
     StudentSearchView, StudentTransferView,
@@ -12,6 +13,8 @@ urlpatterns = [
     path('classrooms/', ClassroomListCreateView.as_view(), name='classroom-list'),
     path('classrooms/<int:pk>/', ClassroomDetailView.as_view(), name='classroom-detail'),
     path('classrooms/<int:pk>/students/', ClassroomStudentsView.as_view(), name='classroom-students'),
+    path('classrooms/<int:pk>/assign-class-teacher/', AssignClassTeacherView.as_view(), name='classroom-assign-class-teacher'),
+    path('classrooms/<int:pk>/unassign-class-teacher/', UnassignClassTeacherView.as_view(), name='classroom-unassign-class-teacher'),
     path('guardians/', GuardianListCreateView.as_view(), name='guardian-list'),
     path('guardians/<int:pk>/', GuardianDetailView.as_view(), name='guardian-detail'),
     path('', StudentListCreateView.as_view(), name='student-list'),

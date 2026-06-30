@@ -3,7 +3,7 @@ import csv
 import io
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import transaction, IntegrityError, models
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
@@ -15,6 +15,7 @@ from students.models import Student
 
 from ..models import (
     CBCGrade,
+    ClassSubjectAssignment,
     ExamCBCSync,
     ExamResult,
     ExamConfig,
@@ -40,6 +41,18 @@ from .mixins import (
     _teacher_subject_ids,
     _validate_student_for_user,
 )
+
+
+def _teacher_has_subject_assignment(user, exam_subject):
+    """Check if teacher has a ClassSubjectAssignment for this exam's class+subject."""
+    if not _is_teacher(user):
+        return True
+    return ClassSubjectAssignment.objects.filter(
+        tenant=user.tenant,
+        teacher=user,
+        classroom=exam_subject.exam.classroom,
+        subject=exam_subject.subject,
+    ).exists()
 
 
 class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
@@ -72,7 +85,12 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         classroom = serializer.validated_data['classroom']
         if classroom.tenant_id != self.request.user.tenant_id:
             raise ValidationError('Classroom must belong to your school.')
-        serializer.save(tenant=self.request.user.tenant, created_by=self.request.user)
+        try:
+            serializer.save(tenant=self.request.user.tenant, created_by=self.request.user)
+        except IntegrityError:
+            raise ValidationError(
+                'An exam with this name already exists for this class, term and academic year.'
+            )
 
     def perform_update(self, serializer):
         classroom = serializer.validated_data.get('classroom', serializer.instance.classroom)
@@ -204,10 +222,27 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         students = Student.objects.filter(tenant=tenant, classroom=exam.classroom, is_active=True).order_by('last_name', 'first_name')
         exam_subjects = exam.exam_subjects.select_related('subject').all()
         if _is_teacher(request.user):
-            exam_subjects = exam_subjects.filter(teacher=request.user)
+            # Check both explicit ExamSubject.teacher AND ClassSubjectAssignment
+            exam_subjects = exam_subjects.filter(
+                models.Q(teacher=request.user) |
+                models.Q(
+                    subject__assignments__teacher=request.user,
+                    subject__assignments__classroom=exam.classroom,
+                    subject__assignments__academic_year=exam.academic_year,
+                    subject__assignments__term=exam.term,
+                )
+            ).distinct()
         existing = ExamResult.objects.filter(tenant=tenant, exam_subject__exam=exam)
         if _is_teacher(request.user):
-            existing = existing.filter(exam_subject__teacher=request.user)
+            existing = existing.filter(
+                models.Q(exam_subject__teacher=request.user) |
+                models.Q(
+                    exam_subject__subject__assignments__teacher=request.user,
+                    exam_subject__subject__assignments__classroom=exam.classroom,
+                    exam_subject__subject__assignments__academic_year=exam.academic_year,
+                    exam_subject__subject__assignments__term=exam.term,
+                )
+            ).distinct()
         result_map = {
             (r.student_id, r.exam_subject_id): {
                 'result_id': str(r.id),
@@ -267,8 +302,15 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         if _is_teacher(self.request.user):
             qs = qs.filter(
                 exam_subject__exam__classroom_id__in=_teacher_classroom_ids(self.request.user),
-                exam_subject__teacher=self.request.user,
-            )
+            ).filter(
+                models.Q(exam_subject__teacher=self.request.user) |
+                models.Q(
+                    exam_subject__subject__assignments__teacher=self.request.user,
+                    exam_subject__subject__assignments__classroom=models.F('exam_subject__exam__classroom'),
+                    exam_subject__subject__assignments__academic_year=models.F('exam_subject__exam__academic_year'),
+                    exam_subject__subject__assignments__term=models.F('exam_subject__exam__term'),
+                )
+            ).distinct()
         if _is_parent(self.request.user):
             qs = qs.filter(student__primary_guardian__user=self.request.user)
         return qs
@@ -299,9 +341,32 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             raise ValidationError('Exam subject and student must belong to your school.')
         if student.classroom_id != exam_subject.exam.classroom_id:
             raise ValidationError('Student must be in the exam classroom.')
-        if _is_teacher(self.request.user) and exam_subject.teacher_id != self.request.user.id:
-            raise PermissionDenied('You can only enter marks for your assigned exam subjects.')
+        if _is_teacher(self.request.user):
+            # Check explicit ExamSubject.teacher first, then fall back to ClassSubjectAssignment
+            if exam_subject.teacher_id == self.request.user.id:
+                return
+            if not _teacher_has_subject_assignment(self.request.user, exam_subject):
+                raise PermissionDenied('You can only enter marks for your assigned exam subjects.')
 
+    @action(detail=False, methods=['get'], url_path='student-results')
+    def student_results(self, request):
+        student_id = request.query_params.get('student')
+        term = request.query_params.get('term')
+        academic_year = request.query_params.get('academic_year')
+
+        if not student_id:
+            return Response({'error': 'student param required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        _validate_student_for_user(request.user, student_id)
+        qs = self.get_queryset().filter(student_id=student_id)
+        if term:
+            qs = qs.filter(exam_subject__exam__term=term)
+        if academic_year:
+            qs = qs.filter(exam_subject__exam__academic_year=int(academic_year))
+
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+    
     @action(detail=False, methods=['post'], url_path='bulk')
     def bulk_enter(self, request):
         serializer = BulkExamResultSerializer(data=request.data)
@@ -312,8 +377,11 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
         if exam_subject.tenant_id != tenant.id:
             raise ValidationError({'exam_subject': 'Exam subject not found in this school.'})
-        if _is_teacher(request.user) and exam_subject.teacher_id != request.user.id:
-            raise PermissionDenied('You can only enter marks for your assigned exam subjects.')
+        if _is_teacher(request.user):
+            if exam_subject.teacher_id == request.user.id:
+                pass  # OK - explicitly assigned
+            elif not _teacher_has_subject_assignment(request.user, exam_subject):
+                raise PermissionDenied('You can only enter marks for your assigned exam subjects.')
 
         created = 0
         updated = 0
@@ -361,96 +429,115 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
         return Response({'created': created, 'updated': updated, 'errors': errors, 'total': created + updated}, status=status.HTTP_201_CREATED)
 
-@action(detail=False, methods=['post'], url_path='import-csv', parser_classes=[MultiPartParser])
-def import_csv(self, request):
-    file = request.FILES.get('file')
-    exam_setup_id = request.data.get('exam_setup')
-    if not file or not exam_setup_id:
-        return Response({'error': 'file and exam_setup required'}, status=status.HTTP_400_BAD_REQUEST)
+    @action(detail=False, methods=['post'], url_path='import-csv', parser_classes=[MultiPartParser])
+    def import_csv(self, request):
+        file = request.FILES.get('file')
+        exam_setup_id = request.data.get('exam_setup')
+        if not file or not exam_setup_id:
+            return Response({'error': 'file and exam_setup required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    tenant = request.user.tenant
-    exam = ExamSetup.objects.filter(id=exam_setup_id, tenant=tenant).first()
-    if not exam:
-        return Response({'error': 'Exam not found.'}, status=status.HTTP_404_NOT_FOUND)
+        tenant = request.user.tenant
+        exam = ExamSetup.objects.filter(id=exam_setup_id, tenant=tenant).first()
+        if not exam:
+            return Response({'error': 'Exam not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-    config = ExamConfig.get_for_tenant(tenant)
-    content = file.read().decode('utf-8')
-    reader = csv.DictReader(io.StringIO(content))
-    # Normalize headers
-    headers = {h.strip().upper(): h for h in (reader.fieldnames or [])}
+        # Build subject lookup: code -> ExamSubject
+        exam_subjects = {es.subject.code.upper(): es for es in exam.exam_subjects.all()}
+        if not exam_subjects:
+            return Response({'error': 'No subjects configured for this exam.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    created = 0
-    updated = 0
-    errors = []
+        config = ExamConfig.get_for_tenant(tenant)
+        content = file.read().decode('utf-8')
+        reader = csv.DictReader(io.StringIO(content))
 
-    with transaction.atomic():
-        for i, raw_row in enumerate(reader, start=2):
-            row = {k.strip().upper(): v.strip() for k, v in raw_row.items() if v is not None}
-            adm = row.get('ADMISSION_NUMBER', '')
-            subject_code = row.get('SUBJECT_CODE', '').upper()
-            marks_str = row.get('MARKS', '')
+        # Normalize headers
+        fieldnames = [h.strip().upper() for h in (reader.fieldnames or [])]
+        if 'ADMISSION_NUMBER' not in fieldnames:
+            return Response({'error': 'CSV must have an admission_number column.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            if not adm or not subject_code or not marks_str:
-                errors.append({'row': i, 'message': 'Missing admission_number, subject_code, or marks'})
+        # Map subject codes to column names (case-insensitive)
+        # Explicitly skip non-subject columns like admission_number and name
+        subject_code_map = {}
+        for header in fieldnames:
+            h_upper = header.upper()
+            if h_upper in ('ADMISSION_NUMBER', 'NAME'):
                 continue
+            if h_upper in exam_subjects:
+                subject_code_map[header] = h_upper
 
-            try:
-                marks = Decimal(marks_str)
-            except Exception:
-                errors.append({'row': i, 'field': 'marks', 'message': f'Invalid marks "{marks_str}"'})
-                continue
-
-            student = Student.objects.filter(tenant=tenant, admission_number=adm, classroom=exam.classroom).first()
-            if not student:
-                errors.append({'row': i, 'field': 'admission_number', 'message': f'Student {adm} not found in exam class'})
-                continue
-
-            exam_subject = ExamSubject.objects.filter(exam=exam, subject__code=subject_code, tenant=tenant).first()
-            if not exam_subject:
-                errors.append({'row': i, 'field': 'subject_code', 'message': f'Subject {subject_code} not in this exam'})
-                continue
-
-            if _is_teacher(request.user) and exam_subject.teacher_id != request.user.id:
-                errors.append({'row': i, 'field': 'subject_code', 'message': f'Subject {subject_code} is not assigned to you'})
-                continue
-
-            if marks < 0 or marks > exam_subject.total_marks:
-                errors.append({'row': i, 'field': 'marks', 'message': f'Marks {marks} out of range (0-{exam_subject.total_marks})'})
-                continue
-
-            pct = (marks / Decimal(str(exam_subject.total_marks))) * 100
-            level = config.compute_level(marks, exam_subject.total_marks)
-            _, created_flag = ExamResult.objects.update_or_create(
-                tenant=tenant,
-                exam_subject=exam_subject,
-                student=student,
-                defaults={
-                    'marks': marks,
-                    'percentage': pct,
-                    'cbc_level': level,
-                    'is_overridden': False,
-                    'override_reason': '',
-                    'entered_by': request.user,
-                },
+        if not subject_code_map:
+            return Response(
+                {'error': f'No valid subject columns found in CSV. Expected one of: {", ".join(sorted(exam_subjects.keys()))}'},
+                status=status.HTTP_400_BAD_REQUEST
             )
-            if created_flag:
-                created += 1
-            else:
-                updated += 1
 
-    return Response({'created': created, 'updated': updated, 'errors': errors, 'total_rows_processed': created + updated + len(errors)})
+        created = 0
+        updated = 0
+        errors = []
 
-    @action(detail=False, methods=['get'], url_path='student-results')
-    def student_results(self, request):
-        student_id = request.query_params.get('student')
-        if not student_id:
-            return Response({'error': 'student param required'}, status=status.HTTP_400_BAD_REQUEST)
-        _validate_student_for_user(request.user, student_id)
-        qs = self.get_queryset().filter(student_id=student_id)
-        term = request.query_params.get('term')
-        year = request.query_params.get('academic_year')
-        if term:
-            qs = qs.filter(exam_subject__exam__term=term)
-        if year:
-            qs = qs.filter(exam_subject__exam__academic_year=int(year))
-        return Response(ExamResultSerializer(qs, many=True).data)
+        with transaction.atomic():
+            for i, raw_row in enumerate(reader, start=2):
+                row = {k.strip().upper(): (v.strip() if v is not None else '') for k, v in raw_row.items()}
+                adm = row.get('ADMISSION_NUMBER', '')
+                if not adm:
+                    errors.append({'row': i, 'message': 'Missing admission_number'})
+                    continue
+
+                student = Student.objects.filter(tenant=tenant, admission_number=adm, classroom=exam.classroom).first()
+                if not student:
+                    errors.append({'row': i, 'field': 'admission_number', 'message': f'Student {adm} not found in exam class'})
+                    continue
+
+                for col_name, subject_code in subject_code_map.items():
+                    marks_str = row.get(subject_code, '')
+                    if not marks_str:
+                        continue  # skip empty cells
+
+                    try:
+                        marks = Decimal(marks_str)
+                    except Exception:
+                        errors.append({'row': i, 'field': subject_code, 'message': f'Invalid marks "{marks_str}"'})
+                        continue
+
+                    exam_subject = exam_subjects.get(subject_code)
+                    if not exam_subject:
+                        errors.append({'row': i, 'field': subject_code, 'message': f'Subject {subject_code} not in this exam'})
+                        continue
+
+                    if _is_teacher(request.user):
+                        if exam_subject.teacher_id == request.user.id:
+                            pass  # OK
+                        elif not _teacher_has_subject_assignment(request.user, exam_subject):
+                            errors.append({'row': i, 'field': subject_code, 'message': f'Subject {subject_code} is not assigned to you'})
+                            continue
+
+                    if marks < 0 or marks > exam_subject.total_marks:
+                        errors.append({'row': i, 'field': subject_code, 'message': f'Marks {marks} out of range (0-{exam_subject.total_marks})'})
+                        continue
+
+                    pct = (marks / Decimal(str(exam_subject.total_marks))) * 100
+                    level = config.compute_level(marks, exam_subject.total_marks)
+                    _, created_flag = ExamResult.objects.update_or_create(
+                        tenant=tenant,
+                        exam_subject=exam_subject,
+                        student=student,
+                        defaults={
+                            'marks': marks,
+                            'percentage': pct,
+                            'cbc_level': level,
+                            'is_overridden': False,
+                            'override_reason': '',
+                            'entered_by': request.user,
+                        },
+                    )
+                    if created_flag:
+                        created += 1
+                    else:
+                        updated += 1
+
+        return Response({
+            'created': created,
+            'updated': updated,
+            'errors': errors,
+            'total_rows_processed': created + updated + len(errors),
+        })

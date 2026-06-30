@@ -10,6 +10,9 @@ from .models import (
     SMSLog,
 )
 
+# Kept in sync with communication.views.TEACHER_ALLOWED_CHANNELS.
+TEACHER_ALLOWED_CHANNELS = {'inapp', 'whatsapp'}
+
 
 class MessageTemplateSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
@@ -68,6 +71,20 @@ class AnnouncementSerializer(serializers.ModelSerializer):
         invalid = sorted(set(value) - allowed)
         if invalid:
             raise serializers.ValidationError(f'Unsupported channels: {", ".join(invalid)}.')
+
+        # Role-aware restriction, mirrored from the view-level check in
+        # AnnouncementViewSet.perform_create. Having it here too means this
+        # validation can't be bypassed if this serializer is ever reused
+        # from a different view/endpoint that forgets the view-level check.
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user and getattr(user, 'role', None) == 'teacher':
+            disallowed = sorted(set(value) - TEACHER_ALLOWED_CHANNELS)
+            if disallowed:
+                raise serializers.ValidationError(
+                    f'Teachers can only send via {", ".join(sorted(TEACHER_ALLOWED_CHANNELS))}. '
+                    f'Not allowed: {", ".join(disallowed)}.'
+                )
         return value
 
 

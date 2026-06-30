@@ -78,8 +78,10 @@ function ExamConfigModal({ onClose }) {
   )
 }
 
-function CreateExamModal({ classrooms, subjects, onClose, onDone }) {
+function CreateExamModal({ classrooms, onClose, onDone }) {
   const [saving, setSaving] = useState(false)
+  const [availableSubjects, setAvailableSubjects] = useState([])
+  const [subjectsLoading, setSubjectsLoading] = useState(false)
   const [form, setForm] = useState({
     name: '',
     exam_type: 'endterm',
@@ -92,12 +94,33 @@ function CreateExamModal({ classrooms, subjects, onClose, onDone }) {
     subjects: [],
   })
 
+  // Fetch subjects filtered by selected classroom
+  useEffect(() => {
+    if (!form.classroom) {
+      setAvailableSubjects([])
+      return
+    }
+    setSubjectsLoading(true)
+    academicsApi.getSubjects({ classroom: form.classroom })
+      .then(({ data }) => setAvailableSubjects(listFromResponse(data)))
+      .catch(() => setAvailableSubjects([]))
+      .finally(() => setSubjectsLoading(false))
+  }, [form.classroom])
+
   const toggleSubject = (subjectId) => {
     setForm(current => ({
       ...current,
       subjects: current.subjects.includes(subjectId)
         ? current.subjects.filter(id => id !== subjectId)
         : [...current.subjects, subjectId],
+    }))
+  }
+
+  const handleClassroomChange = (classroomId) => {
+    setForm(current => ({
+      ...current,
+      classroom: classroomId,
+      subjects: [], // Clear selected subjects when classroom changes
     }))
   }
 
@@ -125,7 +148,7 @@ function CreateExamModal({ classrooms, subjects, onClose, onDone }) {
           <Select label="Exam Type" value={form.exam_type} onChange={e => setForm(f => ({ ...f, exam_type: e.target.value }))}>
             {EXAM_TYPES.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
           </Select>
-          <Select label="Classroom" value={form.classroom} onChange={e => setForm(f => ({ ...f, classroom: e.target.value }))} required>
+          <Select label="Classroom" value={form.classroom} onChange={e => handleClassroomChange(e.target.value)} required>
             <option value="">Select class</option>
             {classrooms.map(c => <option key={c.id} value={c.id}>{classroomLabel(c)}</option>)}
           </Select>
@@ -136,17 +159,27 @@ function CreateExamModal({ classrooms, subjects, onClose, onDone }) {
           <Input label="Start Date" type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} required />
           <Input label="End Date" type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} required />
         </div>
-        <textarea value={form.instructions} onChange={e => setForm(f => ({ ...f, instructions: e.target.value }))} placeholder="Instructions" className="min-h-20 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-blue-400" />
+        <textarea value={form.instructions} onChange={e => setForm(f => ({ ...f, instructions: e.target.value }))} placeholder="Instructions" className="min-h-20 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[var(--brand-primary)]" />
         <div>
           <p className="mb-2 text-sm font-medium text-gray-700">Subjects</p>
-          <div className="grid max-h-52 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2">
-            {subjects.map(subject => (
-              <label key={subject.id} className="flex items-center gap-2 rounded-lg border border-gray-100 px-3 py-2 text-sm">
-                <input type="checkbox" checked={form.subjects.includes(subject.id)} onChange={() => toggleSubject(subject.id)} />
-                <span>{subject.name}</span>
-              </label>
-            ))}
-          </div>
+          {!form.classroom ? (
+            <p className="text-sm text-gray-500">Select a classroom to see available subjects.</p>
+          ) : subjectsLoading ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Spinner className="h-4 w-4" /> Loading subjects...
+            </div>
+          ) : availableSubjects.length === 0 ? (
+            <p className="text-sm text-gray-500">No subjects assigned to this classroom.</p>
+          ) : (
+            <div className="grid max-h-52 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2">
+              {availableSubjects.map(subject => (
+                <label key={subject.id} className="flex items-center gap-2 rounded-lg border border-gray-100 px-3 py-2 text-sm hover:bg-gray-50 cursor-pointer">
+                  <input type="checkbox" checked={form.subjects.includes(subject.id)} onChange={() => toggleSubject(subject.id)} />
+                  <span>{subject.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
       </form>
     </Modal>
@@ -159,7 +192,6 @@ export default function ExamsDashboard() {
   const isAdmin = ['admin', 'superadmin'].includes(user?.role)
   const [exams, setExams] = useState([])
   const [classrooms, setClassrooms] = useState([])
-  const [subjects, setSubjects] = useState([])
   const [filters, setFilters] = useState({ term: '', academic_year: thisYear(), classroom: '', exam_type: '' })
   const [loading, setLoading] = useState(true)
   const [configOpen, setConfigOpen] = useState(false)
@@ -170,14 +202,12 @@ export default function ExamsDashboard() {
     setLoading(true)
     try {
       const params = Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== ''))
-      const [examRes, classRes, subjectRes] = await Promise.all([
+      const [examRes, classRes] = await Promise.all([
         academicsApi.getExamSetups(params),
         studentsApi.getClassrooms(),
-        academicsApi.getSubjects(),
       ])
       setExams(listFromResponse(examRes.data))
       setClassrooms(listFromResponse(classRes.data))
-      setSubjects(listFromResponse(subjectRes.data))
     } finally {
       setLoading(false)
     }
@@ -255,7 +285,7 @@ export default function ExamsDashboard() {
                   <div><p className="text-gray-500">Results</p><p className="font-semibold">{exam.results_count || 0}/{total}</p></div>
                 </div>
                 <div className="mt-4 h-2 rounded-full bg-gray-100">
-                  <div className="h-2 rounded-full bg-blue-600" style={{ width: `${Math.min(progress, 100)}%` }} />
+                  <div className="h-2 rounded-full bg-[var(--brand-primary)]" style={{ width: `${Math.min(progress, 100)}%` }} />
                 </div>
                 <p className="mt-1 text-xs text-gray-500">{progress}% marks entry completion</p>
                 {exam.last_sync_at && <p className="mt-2 text-xs text-green-700">Last synced {new Date(exam.last_sync_at).toLocaleString()}</p>}
@@ -270,7 +300,7 @@ export default function ExamsDashboard() {
         </div>
       )}
       {configOpen && <ExamConfigModal onClose={() => setConfigOpen(false)} />}
-      {createOpen && <CreateExamModal classrooms={classrooms} subjects={subjects} onClose={() => setCreateOpen(false)} onDone={fetchData} />}
+      {createOpen && <CreateExamModal classrooms={classrooms} onClose={() => setCreateOpen(false)} onDone={fetchData} />}
     </div>
   )
 }

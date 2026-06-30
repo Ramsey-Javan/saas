@@ -104,7 +104,7 @@ export default function StudentDetailPage() {
       setStudent(studentRes.data)
       setSelectedStatus(studentRes.data?.status || 'active')
       setStudentFee((invoiceRes.data.results || invoiceRes.data || [])[0] || null)
-      setActiveWaiverslistFromResponse(waiverRes.data)
+      setActiveWaivers(listFromResponse(waiverRes.data))
       setSelectedClassroom('')
     } catch (err) {
       setError(`Transfer failed: ${err.response?.data?.detail || 'Try again'}`)
@@ -147,6 +147,12 @@ export default function StudentDetailPage() {
   const guardian = student.primary_guardian_data
   const classroom = student.classroom_data
   const canTakePayment = ['admin', 'bursar', 'finance'].includes(user?.role)
+  // Same role set as canTakePayment, but named for clarity at each gate
+  // below — a teacher (homeroom or subject) must never see fee balances,
+  // waivers, or payment actions, regardless of how studentFee/activeWaivers
+  // happen to be populated.
+  const canViewFinance = canTakePayment
+  const isAdmin = ['admin', 'superadmin'].includes(user?.role)
 
   return (
     <div className="max-w-4xl">
@@ -192,7 +198,7 @@ export default function StudentDetailPage() {
         <div className="lg:col-span-2 space-y-5">
           <Card className="p-5">
             <h2 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-              <BookOpen size={15} className="text-blue-600" /> Academic Details
+              <BookOpen size={15} className="text-[var(--brand-primary)]" /> Academic Details
             </h2>
             <InfoRow label="Class" value={classroom ? `${classroomLabel(classroom)} (${classroom.academic_year})` : null} />
             <InfoRow label="Grade Level" value={classroom?.grade_level} />
@@ -201,7 +207,7 @@ export default function StudentDetailPage() {
             <InfoRow label="NEMIS UPI No." value={student.nemis_no} />
           </Card>
 
-          {activeWaivers.length > 0 && (
+          {canViewFinance && activeWaivers.length > 0 && (
             <Card className="p-5 border-l-4 border-l-emerald-500">
               <h2 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <CheckCircle size={15} className="text-emerald-600" /> Active Waivers
@@ -227,7 +233,7 @@ export default function StudentDetailPage() {
 
           <Card className="p-5">
             <h2 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-              <User size={15} className="text-blue-600" /> Personal Details
+              <User size={15} className="text-[var(--brand-primary)]" /> Personal Details
             </h2>
             <InfoRow label="Date of Birth" value={student.date_of_birth} />
             <InfoRow label="Age" value={student.age ? `${student.age} years` : null} />
@@ -249,7 +255,7 @@ export default function StudentDetailPage() {
         <div className="space-y-5">
           <Card className="p-5">
             <h2 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-              <Phone size={15} className="text-blue-600" /> Primary Guardian
+              <Phone size={15} className="text-[var(--brand-primary)]" /> Primary Guardian
             </h2>
             {guardian ? (
               <>
@@ -273,7 +279,7 @@ export default function StudentDetailPage() {
             )}
           </Card>
 
-          {(studentFee || canTakePayment) && (
+          {canViewFinance && (studentFee || canTakePayment) && (
             <Card className="p-5 border-l-4 border-l-green-500">
               <h2 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <DollarSign size={15} className="text-green-600" /> Fee Balance
@@ -310,32 +316,38 @@ export default function StudentDetailPage() {
           <Card className="p-5">
             <h2 className="text-sm font-semibold text-gray-900 mb-3">Quick Actions</h2>
             <div className="space-y-2">
-              <Select
-                value={selectedClassroom}
-                onChange={e => setSelectedClassroom(e.target.value)}
-              >
-                <option value="">Select new class...</option>
-                {classrooms.map(c => (
-                  <option key={c.id} value={c.id}>{classroomLabel(c)} ({c.academic_year})</option>
-                ))}
-              </Select>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="w-full justify-start gap-2"
-                onClick={handleTransfer}
-                disabled={!selectedClassroom || transferLoading}
-              >
-                {transferLoading ? <Spinner className="h-4 w-4" /> : 'Transfer Class'}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="w-full justify-start gap-2"
-                onClick={() => navigate(`/finance/students/${id}/statement`)}
-              >
-                View Fee Balance
-              </Button>
+              {isAdmin && (
+                <>
+                  <Select
+                    value={selectedClassroom}
+                    onChange={e => setSelectedClassroom(e.target.value)}
+                  >
+                    <option value="">Select new class...</option>
+                    {classrooms.map(c => (
+                      <option key={c.id} value={c.id}>{classroomLabel(c)} ({c.academic_year})</option>
+                    ))}
+                  </Select>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="w-full justify-start gap-2"
+                    onClick={handleTransfer}
+                    disabled={!selectedClassroom || transferLoading}
+                  >
+                    {transferLoading ? <Spinner className="h-4 w-4" /> : 'Transfer Class'}
+                  </Button>
+                </>
+              )}
+              {canViewFinance && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="w-full justify-start gap-2"
+                  onClick={() => navigate(`/finance/students/${id}/statement`)}
+                >
+                  View Fee Balance
+                </Button>
+              )}
               {canTakePayment && (
                 <Button
                   variant="secondary"
@@ -372,25 +384,29 @@ export default function StudentDetailPage() {
                   <CreditCard size={14} /> Generate ID Card
                 </Button>
               )}
-              <Select
-                value={selectedStatus}
-                onChange={e => setSelectedStatus(e.target.value)}
-                disabled={statusLoading}
-              >
-                {STATUS_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </Select>
-              <Button
-                variant={selectedStatus === 'active' ? 'secondary' : 'danger'}
-                size="sm"
-                className="w-full justify-start gap-2"
-                onClick={handleStatusChange}
-                disabled={selectedStatus === student.status || statusLoading}
-              >
-                {statusLoading ? <Spinner className="h-4 w-4" /> : <CheckCircle size={14} />}
-                Apply Status
-              </Button>
+              {isAdmin && (
+                <>
+                  <Select
+                    value={selectedStatus}
+                    onChange={e => setSelectedStatus(e.target.value)}
+                    disabled={statusLoading}
+                  >
+                    {STATUS_OPTIONS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </Select>
+                  <Button
+                    variant={selectedStatus === 'active' ? 'secondary' : 'danger'}
+                    size="sm"
+                    className="w-full justify-start gap-2"
+                    onClick={handleStatusChange}
+                    disabled={selectedStatus === student.status || statusLoading}
+                  >
+                    {statusLoading ? <Spinner className="h-4 w-4" /> : <CheckCircle size={14} />}
+                    Apply Status
+                  </Button>
+                </>
+              )}
             </div>
           </Card>
         </div>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { Download, Flag, History, RefreshCw } from 'lucide-react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { Download, Flag, History, RefreshCw, PenSquare } from 'lucide-react'
 import { academicsApi } from '@/api/academics'
 import { Button, Card, Input, PageHeader, Select, Spinner } from '@/components/ui'
 import { LEVEL_COLORS, LevelBadge, Modal, downloadRowsAsCSV, termLabel } from './shared'
@@ -73,6 +73,7 @@ function StudentPanel({ student, subjects, results, onClose, onSaved }) {
 
 export default function ExamResultsPage() {
   const { examId } = useParams()
+  const navigate = useNavigate()
   const [sheet, setSheet] = useState(null)
   const [loading, setLoading] = useState(true)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -126,21 +127,26 @@ export default function ExamResultsPage() {
     setMessage(data.message)
   }
 
+  // Updated: include 'name' column after admission_number, consistent with template format
   const exportCSV = () => {
-    const rows = [['Student', 'Adm No', ...sheet.exam_subjects.map(subject => subject.subject_name)]]
-    visibleStudents.forEach(student => rows.push([
-      student.name,
-      student.admission_number,
-      ...sheet.exam_subjects.map(subject => {
-        const result = sheet.results[`${student.id}_${subject.id}`]
-        return result ? `${result.marks}/${subject.total_marks} ${result.percentage}% ${result.cbc_level}` : ''
-      }),
-    ]))
+    const rows = [['admission_number', 'name', ...sheet.exam_subjects.map(s => s.subject_code)]]
+    visibleStudents.forEach(student => {
+      rows.push([
+        student.admission_number,
+        student.name,
+        ...sheet.exam_subjects.map(subject => {
+          const result = sheet.results[`${student.id}_${subject.id}`]
+          return result ? `${result.marks}/${subject.total_marks} ${Number(result.percentage).toFixed(1)}% ${result.cbc_level}` : ''
+        }),
+      ])
+    })
     downloadRowsAsCSV(`${sheet.exam.name}_results.csv`, rows)
   }
 
   if (loading) return <div className="flex justify-center py-20"><Spinner className="h-7 w-7" /></div>
   if (!sheet) return <Card className="p-6 text-sm text-gray-500">Exam not found.</Card>
+
+  const hasSubjects = sheet.exam_subjects.length > 0
 
   return (
     <div className="space-y-5">
@@ -148,81 +154,100 @@ export default function ExamResultsPage() {
         title={`${sheet.exam.name} - ${sheet.exam.classroom_name} - ${termLabel(sheet.exam.term)}`}
         action={
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={sync} className="gap-2"><RefreshCw size={16} /> Sync to CBC</Button>
+            {hasSubjects && (
+              <>
+                <Button variant="secondary" onClick={sync} className="gap-2"><RefreshCw size={16} /> Sync to CBC</Button>
+                <Button variant="secondary" onClick={exportCSV} className="gap-2"><Download size={16} /> Export CSV</Button>
+                <Button variant="secondary" onClick={() => window.print()} className="gap-2"><Download size={16} /> Export PDF</Button>
+              </>
+            )}
             <Button variant="secondary" onClick={() => setHistoryOpen(true)} className="gap-2"><History size={16} /> Sync History</Button>
-            <Button variant="secondary" onClick={exportCSV} className="gap-2"><Download size={16} /> Export CSV</Button>
-            <Button variant="secondary" onClick={() => window.print()} className="gap-2"><Download size={16} /> Export PDF</Button>
+            <Button variant="secondary" onClick={() => navigate(`../marks-sheet`)} className="gap-2"><PenSquare size={16} /> Enter Marks</Button>
           </div>
         }
       />
       {message && <div className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-700">{message}</div>}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        {summary.map(row => (
-          <Card key={row.subject.id} className="p-4">
-            <div className="flex items-center justify-between">
-              <p className="font-semibold text-gray-900">{row.subject.subject_name}</p>
-              <p className="text-sm text-gray-500">Average {row.average}</p>
-            </div>
-            <div className="mt-3 grid grid-cols-4 gap-2">
-              {LEVELS.map(level => (
-                <div key={level}>
-                  <div className="mb-1 flex justify-between text-xs"><span>{level}</span><span>{row.counts[level]}</span></div>
-                  <div className="h-2 rounded bg-gray-100"><div className={`h-2 rounded ${LEVEL_COLORS[level].bg}`} style={{ width: `${sheet.students.length ? (row.counts[level] / sheet.students.length) * 100 : 0}%` }} /></div>
+
+      {hasSubjects ? (
+        <>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {summary.map(row => (
+              <Card key={row.subject.id} className="p-4">
+                <div className="flex items-center justify-between">
+                  <p className="font-semibold text-gray-900">{row.subject.subject_name}</p>
+                  <p className="text-sm text-gray-500">Average {row.average}</p>
                 </div>
-              ))}
+                <div className="mt-3 grid grid-cols-4 gap-2">
+                  {LEVELS.map(level => (
+                    <div key={level}>
+                      <div className="mb-1 flex justify-between text-xs"><span>{level}</span><span>{row.counts[level]}</span></div>
+                      <div className="h-2 rounded bg-gray-100"><div className={`h-2 rounded ${LEVEL_COLORS[level].bg}`} style={{ width: `${sheet.students.length ? (row.counts[level] / sheet.students.length) * 100 : 0}%` }} /></div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            ))}
+          </div>
+          <Card className="p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <Select label="Sort by Subject Marks" value={sortSubject} onChange={e => setSortSubject(e.target.value)}>
+              <option value="">Default order</option>
+              {sheet.exam_subjects.map(subject => <option key={subject.id} value={subject.id}>{subject.subject_name}</option>)}
+            </Select>
+            <Select label="CBC Level" value={filterLevel} onChange={e => setFilterLevel(e.target.value)}>
+              <option value="">All levels</option>
+              {LEVELS.map(level => <option key={level} value={level}>{level}</option>)}
+            </Select>
+            <label className="flex items-end gap-2 pb-2 text-sm text-gray-700">
+              <input type="checkbox" checked={overriddenOnly} onChange={e => setOverriddenOnly(e.target.checked)} />
+              Overridden only
+            </label>
+          </Card>
+          <Card className="overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-max min-w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="sticky left-0 z-10 bg-white px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">Student</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">Adm No</th>
+                    {sheet.exam_subjects.map(subject => <th key={subject.id} className="min-w-[140px] px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">{subject.subject_name}</th>)}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {visibleStudents.map(student => (
+                    <tr key={student.id} onClick={() => setStudentOpen(student)} className="cursor-pointer hover:bg-gray-50">
+                      <td className="sticky left-0 bg-white px-4 py-3 font-medium text-gray-900">{student.name}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-gray-600">{student.admission_number}</td>
+                      {sheet.exam_subjects.map(subject => {
+                        const result = sheet.results[`${student.id}_${subject.id}`]
+                        return (
+                          <td key={subject.id} className="px-4 py-3">
+                            {result ? (
+                              <div className="space-y-1">
+                                <p className="font-semibold text-gray-900">{result.marks}/{subject.total_marks}</p>
+                                <p className="text-xs text-gray-500">{Number(result.percentage).toFixed(1)}%</p>
+                                <div className="flex items-center gap-1"><LevelBadge level={result.cbc_level} />{result.is_overridden && <Flag size={13} className="text-orange-600" />}</div>
+                              </div>
+                            ) : <span className="text-gray-400">-</span>}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </Card>
-        ))}
-      </div>
-      <Card className="p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
-        <Select label="Sort by Subject Marks" value={sortSubject} onChange={e => setSortSubject(e.target.value)}>
-          <option value="">Default order</option>
-          {sheet.exam_subjects.map(subject => <option key={subject.id} value={subject.id}>{subject.subject_name}</option>)}
-        </Select>
-        <Select label="CBC Level" value={filterLevel} onChange={e => setFilterLevel(e.target.value)}>
-          <option value="">All levels</option>
-          {LEVELS.map(level => <option key={level} value={level}>{level}</option>)}
-        </Select>
-        <label className="flex items-end gap-2 pb-2 text-sm text-gray-700">
-          <input type="checkbox" checked={overriddenOnly} onChange={e => setOverriddenOnly(e.target.checked)} />
-          Overridden only
-        </label>
-      </Card>
-      <Card className="overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-max min-w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-100">
-                <th className="sticky left-0 z-10 bg-white px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">Student</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">Adm No</th>
-                {sheet.exam_subjects.map(subject => <th key={subject.id} className="min-w-[140px] px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">{subject.subject_name}</th>)}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {visibleStudents.map(student => (
-                <tr key={student.id} onClick={() => setStudentOpen(student)} className="cursor-pointer hover:bg-gray-50">
-                  <td className="sticky left-0 bg-white px-4 py-3 font-medium text-gray-900">{student.name}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-600">{student.admission_number}</td>
-                  {sheet.exam_subjects.map(subject => {
-                    const result = sheet.results[`${student.id}_${subject.id}`]
-                    return (
-                      <td key={subject.id} className="px-4 py-3">
-                        {result ? (
-                          <div className="space-y-1">
-                            <p className="font-semibold text-gray-900">{result.marks}/{subject.total_marks}</p>
-                            <p className="text-xs text-gray-500">{Number(result.percentage).toFixed(1)}%</p>
-                            <div className="flex items-center gap-1"><LevelBadge level={result.cbc_level} />{result.is_overridden && <Flag size={13} className="text-orange-600" />}</div>
-                          </div>
-                        ) : <span className="text-gray-400">-</span>}
-                      </td>
-                    )
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+        </>
+      ) : (
+        <Card className="p-8 text-center">
+          <p className="text-lg font-medium text-gray-900">No exam subjects found</p>
+          <p className="mt-2 text-sm text-gray-500">
+            There are no subjects configured or assigned for this exam.
+            If you are a teacher, please contact an administrator to be assigned to exam subjects.
+          </p>
+        </Card>
+      )}
+
       {historyOpen && <SyncHistoryModal examId={examId} onClose={() => setHistoryOpen(false)} />}
       {studentOpen && <StudentPanel student={studentOpen} subjects={sheet.exam_subjects} results={sheet.results} onClose={() => setStudentOpen(null)} onSaved={fetchSheet} />}
     </div>

@@ -114,7 +114,7 @@ export default function CommunicationDashboard() {
                         <span className="font-medium text-gray-900">{row.count}</span>
                       </div>
                       <div className="h-2 rounded-full bg-gray-100">
-                        <div className="h-2 rounded-full bg-blue-600" style={{ width: `${pct}%` }} />
+                        <div className="h-2 rounded-full bg-[var(--brand-primary)]" style={{ width: `${pct}%` }} />
                       </div>
                     </div>
                   )

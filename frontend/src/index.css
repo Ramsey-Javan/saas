@@ -4,6 +4,12 @@
 
 @layer base {
   :root {
+    --brand-primary: #1e40af;
+    --brand-primary-hover: #1e3a8a;
+    --brand-primary-light: #eff6ff;
+    --brand-primary-ring: #1e40af33;
+    --brand-secondary: #ffffff;
+    --brand-accent: #fbbc04;
     --background: 0 0% 100%;
     --foreground: 0 0% 3.6%;
     --card: 0 0% 100%;

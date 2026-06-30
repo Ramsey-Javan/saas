@@ -1,4 +1,5 @@
 """Curriculum and subject assignment viewsets."""
+from django.db import models
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
@@ -34,6 +35,28 @@ class SubjectViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        # Filter by classroom grade level if provided
+        classroom_id = self.request.query_params.get('classroom')
+        if classroom_id:
+            try:
+                from students.models import Classroom
+                classroom = Classroom.objects.get(id=classroom_id, tenant=self.request.user.tenant)
+                if classroom.grade_level:
+                    qs = qs.filter(
+                        models.Q(grade_levels__contains=[classroom.grade_level]) |
+                        models.Q(grade_levels=[])
+                    )
+            except Classroom.DoesNotExist:
+                pass
+        
+        # Also allow direct grade_level filtering
+        grade_level = self.request.query_params.get('grade_level')
+        if grade_level:
+            qs = qs.filter(
+                models.Q(grade_levels__contains=[grade_level]) |
+                models.Q(grade_levels=[])
+            )
+        
         if _is_teacher(self.request.user):
             qs = qs.filter(id__in=_teacher_subject_ids(self.request.user))
         return qs

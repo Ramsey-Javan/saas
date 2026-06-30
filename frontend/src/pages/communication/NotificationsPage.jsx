@@ -75,7 +75,7 @@ export default function NotificationsPage() {
               type="button"
               onClick={() => handleClick(n)}
               className={`flex w-full items-start gap-4 rounded-lg border p-4 text-left transition-colors ${
-                n.is_read ? 'border-gray-100 bg-white' : 'border-blue-100 bg-blue-50/50'
+                n.is_read ? 'border-gray-100 bg-white' : 'border-[var(--brand-primary-ring)] bg-[var(--brand-primary-light)]'
               }`}
             >
               <NotificationTypeIcon type={n.type} />
@@ -86,12 +86,12 @@ export default function NotificationsPage() {
                 </div>
                 <p className="mt-1 text-sm text-gray-600">{n.body}</p>
                 {n.action_url && (
-                  <Link to={n.action_url} className="mt-2 inline-block text-xs text-blue-600 hover:underline" onClick={e => e.stopPropagation()}>
+                  <Link to={n.action_url} className="mt-2 inline-block text-xs text-[var(--brand-primary)] hover:underline" onClick={e => e.stopPropagation()}>
                     View details →
                   </Link>
                 )}
               </div>
-              {!n.is_read && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-blue-600" />}
+              {!n.is_read && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[var(--brand-primary)]" />}
             </button>
           ))}
         </div>

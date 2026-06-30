@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { Download, X } from 'lucide-react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { Download, X, ClipboardList } from 'lucide-react'
 import { academicsApi } from '@/api/academics'
 import { studentsApi } from '@/api/students'
+import { useAuthStore } from '@/store/authStore'
 import { Badge, Button, Card, Input, PageHeader, Select, Spinner } from '@/components/ui'
 import { StatCard, TERMS, downloadRowsAsCSV, listFromResponse, thisYear } from './shared'
 
@@ -14,12 +15,16 @@ function statusFor(percentage) {
 
 export default function ClassAttendancePage() {
   const { classroomId } = useParams()
+  const navigate = useNavigate()
   const [classroom, setClassroom] = useState(null)
   const [rows, setRows] = useState([])
   const [filters, setFilters] = useState({ term: 'term1', academic_year: thisYear() })
   const [selected, setSelected] = useState(null)
   const [history, setHistory] = useState(null)
   const [loading, setLoading] = useState(true)
+
+  const user = useAuthStore(state => state.user)
+  const isAdmin = useAuthStore(state => state.hasRole('admin', 'superadmin'))
 
   const fetchSummary = useCallback(async () => {
     setLoading(true)
@@ -56,31 +61,64 @@ export default function ClassAttendancePage() {
     ])
   }
 
+  // This shortcut leads to the daily register, which is homeroom-only
+  // (see academics/views/school_life.py: REGISTER_SESSION_TYPES check).
+  // Subject teachers can still mark their own lesson-level sessions —
+  // just not from this particular shortcut, since this page is a
+  // term-long register summary, not a single lesson view.
+  const isClassTeacher = isAdmin || classroom?.class_teacher_id === user?.id
+
   if (loading) return <div className="flex justify-center py-20"><Spinner className="h-7 w-7" /></div>
 
   return (
     <div className="space-y-6">
       <PageHeader
         title={`${classroom?.name || 'Class'} Attendance Summary`}
-        action={<Button variant="secondary" onClick={exportCsv} className="gap-2"><Download size={16} /> Export CSV</Button>}
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={exportCsv} className="gap-2">
+              <Download size={16} /> Export CSV
+            </Button>
+            {isClassTeacher && (
+              <Button
+                onClick={() => navigate(`/academics/attendance?classroom=${classroomId}`)}
+                className="gap-2"
+              >
+                <ClipboardList size={16} /> Mark Attendance
+              </Button>
+            )}
+          </div>
+        }
       />
+
+      {!isClassTeacher && (
+        <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
+          Only the class teacher can mark the daily register for this class. If you teach a subject
+          here, you can still mark attendance for your own lessons from that lesson's session.
+        </div>
+      )}
+
       <Card className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
         <Select label="Term" value={filters.term} onChange={e => setFilters(f => ({ ...f, term: e.target.value }))}>
           {TERMS.map(term => <option key={term.value} value={term.value}>{term.label}</option>)}
         </Select>
         <Input label="Academic Year" type="number" value={filters.academic_year} onChange={e => setFilters(f => ({ ...f, academic_year: e.target.value }))} />
       </Card>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard label="Average Attendance" value={`${stats.avg}%`} />
         <StatCard label="Students Below 80%" value={stats.atRisk} tone="red" />
         <StatCard label="Total Sessions" value={stats.totalSessions} tone="purple" />
       </div>
+
       <Card>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100">
-                {['Student', 'Present', 'Absent', 'Late', 'Excused', 'Total', 'Percentage', 'Status'].map(h => <th key={h} className="px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">{h}</th>)}
+                {['Student', 'Present', 'Absent', 'Late', 'Excused', 'Total', 'Percentage', 'Status'].map(h => (
+                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">{h}</th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">

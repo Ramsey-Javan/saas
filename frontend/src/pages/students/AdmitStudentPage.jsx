@@ -164,7 +164,7 @@ export default function AdmitStudentPage() {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="text-center">
-          <div className="animate-spin h-8 w-8 border-4 border-blue-600 border-t-transparent rounded-full mx-auto mb-3" />
+          <div className="animate-spin h-8 w-8 border-4 border-[var(--brand-primary)] border-t-transparent rounded-full mx-auto mb-3" />
           <p className="text-sm text-gray-500">Loading student data...</p>
         </div>
       </div>
@@ -196,9 +196,9 @@ export default function AdmitStudentPage() {
         <Card className="p-5">
           <h2 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
             {isEditMode ? (
-              <Edit2 size={16} className="text-blue-600" />
+              <Edit2 size={16} className="text-[var(--brand-primary)]" />
             ) : (
-              <UserPlus size={16} className="text-blue-600" />
+              <UserPlus size={16} className="text-[var(--brand-primary)]" />
             )}
             Student Information
           </h2>
@@ -267,7 +267,7 @@ export default function AdmitStudentPage() {
                     type="file"
                     accept="image/*"
                     onChange={handlePhotoChange}
-                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-[var(--brand-primary-light)] file:text-[var(--brand-primary)] hover:file:opacity-90"
                   />
                   <p className="mt-1 text-xs text-gray-500">
                     JPG, PNG or GIF. Max 5MB.
@@ -282,7 +282,7 @@ export default function AdmitStudentPage() {
               placeholder="Any allergies, conditions, or special needs..."
               rows={2}
               {...register('medical_notes')}
-              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 resize-none"
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-[var(--brand-primary-ring)] focus:border-[var(--brand-primary)] resize-none"
             />
           </div>
         </Card>

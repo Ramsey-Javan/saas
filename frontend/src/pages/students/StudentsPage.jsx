@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Users, Search, Plus, Upload } from 'lucide-react'
 import { studentsApi } from '@/api/students'
 import { PageHeader, Card, Badge, Avatar, Button, Spinner, EmptyState, Select } from '@/components/ui'
@@ -32,11 +32,20 @@ const classroomLabel = (classroom) => (
 
 export default function StudentsPage() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [students, setStudents] = useState([])
   const [classrooms, setClassrooms] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [filters, setFilters] = useState({ classroom: '', gender: '', grade: '', status: 'active' })
+  // Pre-fill the classroom filter from ?classroom=<id> in the URL, e.g.
+  // when arriving from the "View Students" link on the Classrooms page.
+  // Falls back to '' (All Classes) if the param is absent.
+  const [filters, setFilters] = useState({
+    classroom: searchParams.get('classroom') || '',
+    gender: '',
+    grade: '',
+    status: 'active',
+  })
   const [page, setPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
 
@@ -49,6 +58,22 @@ export default function StudentsPage() {
   useEffect(() => {
     fetchStudents()
   }, [search, filters, page])
+
+  // Keep the URL's ?classroom= param in sync with the filter so the page
+  // stays linkable/bookmarkable and a back-navigation restores the same
+  // filtered view, without fighting React Router over who owns the param.
+  useEffect(() => {
+    const current = searchParams.get('classroom') || ''
+    if (current === filters.classroom) return
+    const next = new URLSearchParams(searchParams)
+    if (filters.classroom) {
+      next.set('classroom', filters.classroom)
+    } else {
+      next.delete('classroom')
+    }
+    setSearchParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.classroom])
 
   const fetchStudents = async () => {
     setLoading(true)
@@ -78,6 +103,13 @@ export default function StudentsPage() {
     ? classrooms.filter(classroom => classroom.grade_level === filters.grade)
     : classrooms
 
+  // If we arrived with a classroom filter pre-set (e.g. from the
+  // Classrooms page), show which class that is even before the dropdown
+  // list has loaded/matched it, so the page doesn't look unfiltered.
+  const activeClassroomLabel = filters.classroom
+    ? classrooms.find(c => String(c.id) === String(filters.classroom))
+    : null
+
   return (
     <div>
       <PageHeader
@@ -85,6 +117,9 @@ export default function StudentsPage() {
         description={`${totalCount} ${filters.status === 'active' ? 'active' : 'matching'} students`}
         action={
           <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => navigate('/students/classrooms')} className="gap-2">
+              Manage Classrooms
+            </Button>
             <Button variant="secondary" onClick={() => navigate('/students/import')} className="gap-2">
               <Upload size={16} /> Bulk Import
             </Button>
@@ -94,6 +129,19 @@ export default function StudentsPage() {
           </div>
         }
       />
+
+      {activeClassroomLabel && (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary-light)] px-4 py-2 text-sm text-[var(--brand-primary)]">
+          <span>Showing students in {classroomLabel(activeClassroomLabel)}</span>
+          <button
+            type="button"
+            className="font-medium hover:underline"
+            onClick={() => { setFilters(f => ({ ...f, classroom: '' })); setPage(1) }}
+          >
+            Clear filter
+          </button>
+        </div>
+      )}
 
       {/* Search + Filters */}
       <Card className="p-4 mb-4">
@@ -105,7 +153,7 @@ export default function StudentsPage() {
               placeholder="Search by name or admission number..."
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1) }}
-              className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400"
+              className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-[var(--brand-primary-ring)] focus:border-[var(--brand-primary)]"
             />
           </div>
           <div className="flex gap-2">
@@ -213,7 +261,7 @@ export default function StudentsPage() {
                       </td>
                       <td className="px-4 py-3 text-right">
                         <button
-                          className="text-xs text-blue-600 hover:underline"
+                          className="text-xs text-[var(--brand-primary)] hover:underline"
                           onClick={e => { e.stopPropagation(); navigate(`/students/${student.id}`) }}
                         >
                           View

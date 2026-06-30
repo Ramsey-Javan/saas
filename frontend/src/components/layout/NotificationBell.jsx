@@ -82,7 +82,7 @@ export default function NotificationBell() {
           <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
             <h3 className="font-semibold text-gray-900">Notifications</h3>
             {unreadCount > 0 && (
-              <button type="button" onClick={handleMarkAll} className="text-xs text-blue-600 hover:underline">
+              <button type="button" onClick={handleMarkAll} className="text-xs text-[var(--brand-primary)] hover:underline">
                 Mark all read
               </button>
             )}
@@ -100,7 +100,7 @@ export default function NotificationBell() {
                   type="button"
                   onClick={() => handleNotificationClick(n)}
                   className={`flex w-full items-start gap-3 border-b border-gray-50 px-4 py-3 text-left hover:bg-gray-50 ${
-                    !n.is_read ? 'bg-blue-50/30' : ''
+                    !n.is_read ? 'bg-[var(--brand-primary-light)]' : ''
                   }`}
                 >
                   <NotificationTypeIcon type={n.type} />
@@ -118,7 +118,7 @@ export default function NotificationBell() {
             <Link
               to="/communication/notifications"
               onClick={() => setOpen(false)}
-              className="block text-center text-xs text-blue-600 hover:underline"
+              className="block text-center text-xs text-[var(--brand-primary)] hover:underline"
             >
               View all notifications
             </Link>

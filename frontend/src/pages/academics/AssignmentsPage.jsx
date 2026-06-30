@@ -6,9 +6,23 @@ import { studentsApi } from '@/api/students'
 import { Button, Card, Input, PageHeader, Select, Spinner } from '@/components/ui'
 import { EmptyTableRow, Modal, TERMS, classroomLabel, listFromResponse, thisYear } from './shared'
 
-function AssignmentModal({ classrooms, subjects, teachers, onClose, onSaved }) {
+function AssignmentModal({ classrooms, teachers, onClose, onSaved }) {
   const [saving, setSaving] = useState(false)
+  const [availableSubjects, setAvailableSubjects] = useState([])
   const [form, setForm] = useState({ classroom: '', subject: '', teacher: '', term: 'term1', academic_year: thisYear() })
+
+  // Fetch subjects matching the selected classroom's grade level
+  useEffect(() => {
+    if (form.classroom) {
+      academicsApi.getSubjects({ classroom: form.classroom }).then(res => {
+        setAvailableSubjects(listFromResponse(res.data))
+      })
+    } else {
+      setAvailableSubjects([])
+    }
+    // Clear subject when classroom changes
+    setForm(f => ({ ...f, subject: '' }))
+  }, [form.classroom])
 
   const submit = async (event) => {
     event.preventDefault()
@@ -38,9 +52,17 @@ function AssignmentModal({ classrooms, subjects, teachers, onClose, onSaved }) {
           <option value="">Select class</option>
           {classrooms.map(c => <option key={c.id} value={c.id}>{classroomLabel(c)} ({c.academic_year})</option>)}
         </Select>
-        <Select label="Subject" value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} required>
-          <option value="">Select subject</option>
-          {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        <Select
+          label="Subject"
+          value={form.subject}
+          onChange={e => setForm(f => ({ ...f, subject: e.target.value }))}
+          required
+          disabled={!form.classroom}
+        >
+          <option value="">{form.classroom ? 'Select subject' : 'Select class first'}</option>
+          {availableSubjects.map(s => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
         </Select>
         <Select label="Teacher" value={form.teacher} onChange={e => setForm(f => ({ ...f, teacher: e.target.value }))} required>
           <option value="">Select teacher</option>
@@ -58,7 +80,6 @@ function AssignmentModal({ classrooms, subjects, teachers, onClose, onSaved }) {
 export default function AssignmentsPage() {
   const [assignments, setAssignments] = useState([])
   const [classrooms, setClassrooms] = useState([])
-  const [subjects, setSubjects] = useState([])
   const [teachers, setTeachers] = useState([])
   const [filters, setFilters] = useState({ academic_year: thisYear(), term: '', classroom: '' })
   const [editingTeacher, setEditingTeacher] = useState({})
@@ -82,11 +103,9 @@ export default function AssignmentsPage() {
   useEffect(() => {
     Promise.all([
       studentsApi.getClassrooms(),
-      academicsApi.getSubjects(),
       api.get('/auth/users/', { params: { role: 'teacher' } }),
-    ]).then(([classroomRes, subjectRes, teacherRes]) => {
+    ]).then(([classroomRes, teacherRes]) => {
       setClassrooms(listFromResponse(classroomRes.data))
-      setSubjects(listFromResponse(subjectRes.data))
       setTeachers(listFromResponse(teacherRes.data).filter(user => user.role === 'teacher'))
     })
   }, [])
@@ -172,7 +191,6 @@ export default function AssignmentsPage() {
       {modalOpen && (
         <AssignmentModal
           classrooms={classrooms}
-          subjects={subjects}
           teachers={teachers}
           onClose={() => setModalOpen(false)}
           onSaved={fetchAssignments}
