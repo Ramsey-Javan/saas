@@ -13,6 +13,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
@@ -95,6 +96,23 @@ class PaymentViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             return Response({'error': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         amount = data['amount']
+
+        # ── BUG FIX: Prevent overpayment beyond current balance ──
+        # If invoice already has credit from previous terms, allow paying up to
+        # balance + credit. Otherwise cap at current balance.
+        current_balance = invoice.balance
+        current_credit = invoice.credit
+        max_payable = current_balance + current_credit
+
+        if amount > max_payable:
+            raise ValidationError({
+                'amount': (
+                    f'Payment of KES {amount:,.2f} exceeds the maximum payable amount of '
+                    f'KES {max_payable:,.2f} for this invoice. '
+                    f'(Balance: KES {current_balance:,.2f}, Available credit: KES {current_credit:,.2f})'
+                )
+            })
+        # ── END BUG FIX ──
 
         payment_status = 'confirmed' if data['method'] in ('cash', 'bank') else 'pending'
         payment = Payment.objects.create(
@@ -363,11 +381,17 @@ class ReceiptViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
 
 class MpesaViewSet(viewsets.ViewSet):
     permission_classes = [IsAdminOrBursar]
+    throttle_scope = 'mpesa_stk'
 
     def get_permissions(self):
         if self.action == 'callback':
             return [AllowAny()]
         return [permission() for permission in self.permission_classes]
+
+    def get_throttles(self):
+        if self.action == 'stk_push':
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
 
     @action(detail=False, methods=['post'])
     def stk_push(self, request):
@@ -389,6 +413,21 @@ class MpesaViewSet(viewsets.ViewSet):
                 raise ValidationError({'student_fee': 'Invoice does not belong to your school.'})
             if student_fee.student_id != student.id:
                 raise ValidationError({'student_fee': 'Invoice does not belong to the selected student.'})
+
+        # ── BUG FIX: Prevent M-Pesa overpayment ──
+        if student_fee:
+            current_balance = student_fee.balance
+            current_credit = student_fee.credit
+            max_payable = current_balance + current_credit
+            if data['amount'] > max_payable:
+                raise ValidationError({
+                    'amount': (
+                        f'Payment of KES {data["amount"]:,.2f} exceeds the maximum payable amount of '
+                        f'KES {max_payable:,.2f} for this invoice. '
+                        f'(Balance: KES {current_balance:,.2f}, Available credit: KES {current_credit:,.2f})'
+                    )
+                })
+        # ── END BUG FIX ──
 
         phone = self._normalize_phone(data['phone'])
         local_checkout_id = str(uuid.uuid4())

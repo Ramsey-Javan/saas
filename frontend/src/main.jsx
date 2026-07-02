@@ -4,6 +4,8 @@ import App from './App.jsx'
 import './index.css'
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query'
 import BrandingProvider from '@/components/BrandingProvider'
+import ErrorBoundary from '@/components/ErrorBoundary'
+import { ToastProvider } from '@/components/ui/Toast'
 import { registerServiceWorker } from '@/lib/pushNotifications'
 import { useAuthStore } from '@/store/authStore'
 
@@ -21,9 +23,13 @@ useAuthStore.getState().setHydrated(true)
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrandingProvider>
-        <App />
-      </BrandingProvider>
+      <ErrorBoundary>
+        <BrandingProvider>
+          <ToastProvider>
+            <App />
+          </ToastProvider>
+        </BrandingProvider>
+      </ErrorBoundary>
     </QueryClientProvider>
   </React.StrictMode>,
 )

@@ -7,6 +7,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.views import TokenObtainPairView
 from academics.views.mixins import TenantScopedMixin
 from .models import CustomUser, StaffInvite, StaffProfile
@@ -26,6 +27,8 @@ from .permissions import IsSchoolAdmin, IsTeacher, IsBursar, IsParent
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+    throttle_scope = 'login'
+    throttle_classes = [ScopedRateThrottle]
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -377,6 +380,8 @@ class StaffInviteViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
 class AcceptInviteView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_scope = 'invite_accept'
+    throttle_classes = [ScopedRateThrottle]
 
     def post(self, request):
         serializer = AcceptInviteSerializer(data=request.data)

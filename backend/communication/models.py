@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.utils.html import strip_tags
 from tenants.models import Tenant
 
 
@@ -44,6 +45,10 @@ class MessageTemplate(TenantModel):
 
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        self.body = strip_tags(self.body)
+        super().save(*args, **kwargs)
 
     def render(self, context: dict) -> str:
         body = self.body
@@ -127,6 +132,10 @@ class Announcement(TenantModel):
 
     def __str__(self):
         return self.title
+
+    def save(self, *args, **kwargs):
+        self.body = strip_tags(self.body)
+        super().save(*args, **kwargs)
 
 
 class MessageLog(TenantModel):

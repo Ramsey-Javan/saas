@@ -101,7 +101,7 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
 
         if not all([classroom_id, term, academic_year]):
             return Response(
-                {'error': 'Missing required fields: classroom, term, academic_year.'},
+                {'error': 'Missing required fields: classroom, term, academic year.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -283,18 +283,18 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
             )
         }
 
+        # ── BUG FIX: Use StudentFee.paid_amount instead of Payment.amount ──
+        # Payment.amount includes overpayments; paid_amount is capped at what's
+        # actually due per invoice by recalculate_student_fees().
         collected_rows = (
-            Payment.objects.filter(
-                student_fee__in=qs,
-                status__in=CONFIRMED_PAYMENT_STATUSES,
-            )
-            .values('student_fee__student__classroom_id')
-            .annotate(collected_total=Coalesce(Sum('amount'), money_zero))
+            qs.values('student__classroom__id')
+            .annotate(collected_total=Coalesce(Sum('paid_amount'), money_zero))
         )
         collected_by_classroom = {
-            row['student_fee__student__classroom_id']: row['collected_total']
+            row['student__classroom__id']: row['collected_total']
             for row in collected_rows
         }
+        # ── END BUG FIX ──
 
         report = []
         for cid, row in expected_by_classroom.items():
@@ -331,15 +331,13 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
             expected_total=Coalesce(Sum(gross_due_expression()), money_zero),
             total_waived=Coalesce(Sum('waived_amount'), money_zero),
         )
-        # collected_total via a SEPARATE query against Payment directly.
-        # See class_report() for why this must never be combined with
-        # expected_total in the same aggregate()/annotate() call (Sum-with-join
-        # fan-out -- any invoice with multiple matching payments would inflate
-        # expected_total too).
-        summary['collected_total'] = Payment.objects.filter(
-            student_fee__in=qs,
-            status__in=CONFIRMED_PAYMENT_STATUSES,
-        ).aggregate(total=Coalesce(Sum('amount'), money_zero))['total']
+        # ── BUG FIX: Use StudentFee.paid_amount instead of Payment.amount ──
+        # Payment.amount includes overpayments; paid_amount is capped at what's
+        # actually due per invoice by recalculate_student_fees().
+        summary['collected_total'] = qs.aggregate(
+            total=Coalesce(Sum('paid_amount'), money_zero)
+        )['total']
+        # ── END BUG FIX ──
         summary['outstanding_total'] = summary['expected_total'] - summary['collected_total']
         return Response(summary)
 
@@ -365,18 +363,13 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
             expected_total=Coalesce(Sum(gross_due_expression()), money_zero),
             total_waived=Coalesce(Sum('waived_amount'), money_zero),
         )
-        # collected_total via a SEPARATE query against Payment directly.
-        # CRITICAL: never combine this with expected_total in one aggregate()/
-        # annotate() call -- Sum(gross_due_expression()) needs no join, but
-        # Sum('payments__amount', ...) requires joining Payment; combining both
-        # in a single query makes Django join Payment for the WHOLE query, and
-        # any invoice with more than one matching confirmed payment gets its
-        # (unrelated) gross_due counted once per matching payment row. This is
-        # exactly what inflated "Total Expected" on the Bursar Dashboard.
-        summary['collected_total'] = Payment.objects.filter(
-            student_fee__in=qs,
-            status__in=CONFIRMED_PAYMENT_STATUSES,
-        ).aggregate(total=Coalesce(Sum('amount'), money_zero))['total']
+        # ── BUG FIX: Use StudentFee.paid_amount instead of Payment.amount ──
+        # Payment.amount includes overpayments; paid_amount is capped at what's
+        # actually due per invoice by recalculate_student_fees().
+        summary['collected_total'] = qs.aggregate(
+            total=Coalesce(Sum('paid_amount'), money_zero)
+        )['total']
+        # ── END BUG FIX ──
         summary['outstanding_total'] = summary['expected_total'] - summary['collected_total']
 
         paid_qs = qs.annotate(
@@ -404,18 +397,16 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
                 .annotate(expected_total=Coalesce(Sum(gross_due_expression()), money_zero))
             )
         }
+        # ── BUG FIX: Use StudentFee.paid_amount instead of Payment.amount ──
         collected_rows = (
-            Payment.objects.filter(
-                student_fee__in=qs,
-                status__in=CONFIRMED_PAYMENT_STATUSES,
-            )
-            .values('student_fee__student__classroom_id')
-            .annotate(collected_total=Coalesce(Sum('amount'), money_zero))
+            qs.values('student__classroom__id')
+            .annotate(collected_total=Coalesce(Sum('paid_amount'), money_zero))
         )
         collected_by_classroom = {
-            row['student_fee__student__classroom_id']: row['collected_total']
+            row['student__classroom__id']: row['collected_total']
             for row in collected_rows
         }
+        # ── END BUG FIX ──
         class_report_rows = []
         for cid, row in expected_by_classroom.items():
             expected = row['expected_total']
