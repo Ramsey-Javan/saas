@@ -178,19 +178,14 @@ def recalculate_student_fees(student):
     in chronological order, flowing surplus credit forward.
 
     KEY INVARIANT: carried_forward is a snapshot set at invoice-generation time
-    and is NEVER modified here. It represents "what was owed from the previous
-    term when this invoice was created". The recalculation below only touches
-    paid_amount, credit, and status.
+    and is NEVER modified here.
 
-    Credit flow:
-      - Each term has a base_due = expected + carried_forward(snapshot) + penalty - waived
-      - Payments recorded against THIS invoice plus any credit cascaded from earlier
-        terms are applied to base_due.
-      - If total available > base_due the surplus becomes cumulative_credit for
-        the next invoice.
-      - If total available < base_due the invoice is partial/unpaid and
-        cumulative_credit resets to 0 (the deficit is not cascaded — it was
-        already snapshotted in the next invoice's carried_forward at generation time).
+    Credit field semantics:
+      credit is ONLY set on the LAST invoice in the chain if there is remaining
+      surplus after all invoices are processed. Intermediate invoices always have
+      credit=0 — the surplus is cascaded via cumulative_credit into the next
+      invoice's paid_amount. This prevents double-counting where the same $500
+      surplus would appear as credit on invoice N AND paid_amount on invoice N+1.
     """
     invoices = (
         StudentFee.objects.filter(student=student, tenant=student.tenant)
@@ -227,14 +222,16 @@ def recalculate_student_fees(student):
         if base_due == Decimal('0.00'):
             # Fully waived or zero-fee term: pass all credit through unchanged
             invoice.paid_amount = Decimal('0.00')
-            invoice.credit = available
+            invoice.credit = Decimal('0.00')
             invoice.status = 'paid'
             cumulative_credit = available
         elif available >= base_due:
             invoice.paid_amount = base_due
-            invoice.credit = available - base_due
+            # credit is cleared here — surplus is tracked in cumulative_credit
+            # and will be written to the final invoice after the loop
+            invoice.credit = Decimal('0.00')
             invoice.status = 'paid'
-            cumulative_credit = invoice.credit
+            cumulative_credit = available - base_due
         elif available > Decimal('0.00'):
             invoice.paid_amount = available
             invoice.credit = Decimal('0.00')
@@ -247,6 +244,14 @@ def recalculate_student_fees(student):
             cumulative_credit = Decimal('0.00')
 
         invoice.save(update_fields=['paid_amount', 'credit', 'status', 'updated_at'])
+
+    # Write any remaining surplus onto the last invoice so it is visible
+    # to the student and to confirm_payment callers. This is the single
+    # canonical location of the credit balance.
+    if invoices and cumulative_credit > Decimal('0.00'):
+        last = invoices[-1]
+        last.credit = cumulative_credit
+        last.save(update_fields=['credit', 'updated_at'])
 
 
 def calculate_waived_amount(student, base_amount, term, year):

@@ -13,6 +13,7 @@ import { financeApi } from '@/api/finance'
 import { studentsApi } from '@/api/students'
 import NotificationBell from '@/components/layout/NotificationBell'
 import TrialBanner from '@/components/layout/TrialBanner'
+import ErrorBoundary from '@/components/ErrorBoundary'
 import CommandPalette from '@/components/command-palette/CommandPalette'
 import { useCommandPalette } from '@/components/command-palette/useCommandPalette'
 
@@ -72,11 +73,12 @@ const NAV_ITEMS = {
 // not just their role.
 const HOME_CLASS_ITEM = { label: 'Home Class', icon: Crown, href: '/teacher/home-class' }
 
-function NavItem({ item, collapsed, badge }) {
+function NavItem({ item, collapsed, badge, onNavigate }) {
   return (
     <NavLink
       to={item.href}
       end={item.href.split('/').length <= 2}
+      onClick={onNavigate}
       className={({ isActive }) => cn(
         'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all group',
         isActive
@@ -182,6 +184,7 @@ export default function AppShell({ children }) {
             item={item}
             collapsed={collapsed}
             badge={item.badgeKey === 'pendingCheques' ? pendingChequesCount : 0}
+            onNavigate={() => setMobileOpen(false)}
           />
         ))}
       </nav>
@@ -276,7 +279,9 @@ export default function AppShell({ children }) {
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto p-6">
-          {children}
+          <ErrorBoundary>
+            {children}
+          </ErrorBoundary>
         </main>
       </div>
     </div>

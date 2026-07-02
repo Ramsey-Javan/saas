@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { useAuthStore } from '@/store/authStore'
+import { toastBus } from '@/lib/toastBus'
 
 function getBaseURL() {
   const hostname = window.location.hostname
@@ -89,6 +90,10 @@ api.interceptors.response.use(
       }
     }
 
+    toastBus.emit(
+      error.response?.data?.message || 'Something went wrong.',
+      'error'
+    )
     return Promise.reject(error)
   }
 )

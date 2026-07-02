@@ -86,18 +86,44 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
     window.URL.revokeObjectURL(url)
   }
 
+  // ── BUG FIX: Helper to validate amount against balance ──
+  const validateAmount = (amount) => {
+    const balance = parseFloat(fee?.effective_balance ?? fee?.balance ?? 0)
+    const credit = parseFloat(fee?.credit ?? 0)
+    const maxPayable = balance + credit
+    const numAmount = parseFloat(amount)
+
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return 'Please enter a valid positive amount.'
+    }
+    if (numAmount > maxPayable) {
+      return (
+        `Amount exceeds the maximum payable of KES ${maxPayable.toLocaleString()}. ` +
+        `(Balance: KES ${balance.toLocaleString()}, Credit: KES ${credit.toLocaleString()})`
+      )
+    }
+    return null
+  }
+  // ── END BUG FIX ──
+
   const handleManualPayment = async (method) => {
     if (!fee?.id) return
     setError('')
     setResult(null)
     setLoading(true)
+
+    const rawAmount = method === 'cash' ? cashAmount : method === 'bank' ? bankAmount : chequeAmount
+
+    // ── BUG FIX: Client-side validation before API call ──
+    const validationError = validateAmount(rawAmount)
+    if (validationError) {
+      setError(validationError)
+      setLoading(false)
+      return
+    }
+    // ── END BUG FIX ──
+
     try {
-      const rawAmount = method === 'cash' ? cashAmount : method === 'bank' ? bankAmount : chequeAmount
-      if (!rawAmount) {
-        setError('Amount is required.')
-        setLoading(false)
-        return
-      }
       const payload = {
         invoice_id: fee.id,
         amount: String(rawAmount),
@@ -180,6 +206,14 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
     </button>
   )
 
+  // ── BUG FIX: Compute max payable for display ──
+  const maxPayableDisplay = () => {
+    const balance = parseFloat(fee?.effective_balance ?? fee?.balance ?? 0)
+    const credit = parseFloat(fee?.credit ?? 0)
+    return balance + credit
+  }
+  // ── END BUG FIX ──
+
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-lg max-w-lg w-full p-6 relative">
@@ -221,9 +255,12 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
                   value={cashAmount}
                   onChange={e => setCashAmount(e.target.value)}
                 />
+                {/* ── BUG FIX: Updated helper text ── */}
                 <p className="text-xs text-gray-500 -mt-2">
-                  You can pay more than the balance. Any excess will be credited to the next term.
+                  Maximum payable: KES {maxPayableDisplay().toLocaleString()}.
+                  Any excess beyond the balance will be credited to the next term.
                 </p>
+                {/* ── END BUG FIX ── */}
                 <Input
                   label="Date"
                   type="date"
@@ -272,9 +309,12 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
                   value={bankAmount}
                   onChange={e => setBankAmount(e.target.value)}
                 />
+                {/* ── BUG FIX: Updated helper text ── */}
                 <p className="text-xs text-gray-500 -mt-2">
-                  You can pay more than the balance. Any excess will be credited to the next term.
+                  Maximum payable: KES {maxPayableDisplay().toLocaleString()}.
+                  Any excess beyond the balance will be credited to the next term.
                 </p>
+                {/* ── END BUG FIX ── */}
                 <Input
                   label="Date"
                   type="date"
@@ -328,9 +368,12 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
                   value={chequeAmount}
                   onChange={e => setChequeAmount(e.target.value)}
                 />
+                {/* ── BUG FIX: Updated helper text ── */}
                 <p className="text-xs text-gray-500 -mt-2">
-                  You can pay more than the balance. Any excess will be credited to the next term.
+                  Maximum payable: KES {maxPayableDisplay().toLocaleString()}.
+                  Any excess beyond the balance will be credited to the next term.
                 </p>
+                {/* ── END BUG FIX ── */}
                 <Input
                   label="Cheque Date"
                   type="date"

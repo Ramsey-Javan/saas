@@ -11,7 +11,7 @@ from rest_framework.response import Response
 
 from accounts.permissions import IsSchoolAdmin
 from accounts.models import CustomUser
-from finance.models import FeeStructure, Payment, StudentFee
+from finance.models import FeeStructure, Payment, StudentFee, CONFIRMED_PAYMENT_STATUSES
 from students.models import Admission, Student, Classroom
 
 from .models import SchoolEvent
@@ -92,18 +92,22 @@ def dashboard_stats(request):
     total_teachers = CustomUser.objects.filter(tenant=tenant, role='teacher').count()
 
     term_info = _current_term(tenant)
-    revenue_qs = Payment.objects.filter(tenant=tenant, status='completed')
-    if term_info:
-        term, academic_year = term_info
-        revenue_qs = revenue_qs.filter(
-            student_fee__fee_structure__term=term,
-            student_fee__fee_structure__academic_year=academic_year,
-        )
-    total_revenue = revenue_qs.aggregate(
-        total=Coalesce(Sum('amount'), Value(Decimal('0.00')))
-    ).get('total')
 
     money_zero = Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2))
+
+    # ── BUG FIX: Use StudentFee.paid_amount for total revenue, not Payment.amount ──
+    # Payment.amount includes overpayments; paid_amount is capped at what's due.
+    student_fee_qs = StudentFee.objects.filter(tenant=tenant)
+    if term_info:
+        term, academic_year = term_info
+        student_fee_qs = student_fee_qs.filter(
+            fee_structure__term=term,
+            fee_structure__academic_year=academic_year,
+        )
+    total_revenue = student_fee_qs.aggregate(
+        total=Coalesce(Sum('paid_amount'), money_zero)
+    ).get('total')
+    # ── END BUG FIX ──
 
     pending_qs = StudentFee.objects.filter(
         tenant=tenant,
@@ -148,19 +152,22 @@ def dashboard_stats(request):
         created_at__lt=last_month_end,
     ).count()
 
-    revenue_this_month = Payment.objects.filter(
-        tenant=tenant,
-        status='completed',
-        created_at__gte=this_month_start,
-        created_at__lt=next_month_start,
-    ).aggregate(total=Coalesce(Sum('amount'), Value(Decimal('0.00')))).get('total')
+    # ── BUG FIX: Revenue this/last month using capped paid_amount, not raw Payment.amount ──
+    # We approximate by looking at StudentFee records that had payments this month.
+    # For true daily granularity we'd need a payment ledger, but this prevents
+    # the overpayment inflation bug.
+    revenue_this_month = student_fee_qs.filter(
+        updated_at__gte=this_month_start,
+        updated_at__lt=next_month_start,
+        paid_amount__gt=0,
+    ).aggregate(total=Coalesce(Sum('paid_amount'), money_zero)).get('total')
 
-    revenue_last_month = Payment.objects.filter(
-        tenant=tenant,
-        status='completed',
-        created_at__gte=last_month_start,
-        created_at__lt=last_month_end,
-    ).aggregate(total=Coalesce(Sum('amount'), Value(Decimal('0.00')))).get('total')
+    revenue_last_month = student_fee_qs.filter(
+        updated_at__gte=last_month_start,
+        updated_at__lt=last_month_end,
+        paid_amount__gt=0,
+    ).aggregate(total=Coalesce(Sum('paid_amount'), money_zero)).get('total')
+    # ── END BUG FIX ──
 
     pending_this_month = pending_qs.filter(
         created_at__gte=this_month_start,
@@ -201,18 +208,19 @@ def dashboard_stats(request):
             'count': e['count'],
         })
 
-    # Fee trends (monthly)
+    # ── BUG FIX: Fee trends using capped paid_amount instead of raw Payment.amount ──
+    # We use TruncMonth on StudentFee.updated_at as a proxy for when payments were applied.
     range_start, range_end = _get_time_range_bounds(time_range, now_local)
-    fee_trends = Payment.objects.filter(
-        tenant=tenant,
-        status='completed',
-        created_at__gte=range_start,
-        created_at__lte=range_end,
+    fee_trends = student_fee_qs.filter(
+        updated_at__gte=range_start,
+        updated_at__lte=range_end,
+        paid_amount__gt=0,
     ).annotate(
-        month=TruncMonth('created_at')
+        month=TruncMonth('updated_at')
     ).values('month').annotate(
-        collected=Coalesce(Sum('amount'), Value(Decimal('0.00')))
+        collected=Coalesce(Sum('paid_amount'), money_zero)
     ).order_by('month')
+    # ── END BUG FIX ──
 
     fee_trends_data = []
     for ft in fee_trends:
@@ -264,8 +272,6 @@ def dashboard_stats(request):
                 'metadata': log.metadata,
             })
     except Exception:
-        # Table doesn't exist yet (migrations not run) or other DB issue
-        # Fall back to empty activity list so dashboard still loads
         pass
 
     return Response({
@@ -347,9 +353,6 @@ def upcoming_events(request):
         events.append(_event_payload(f'manual-{e.id}', e.title, e.date, e.category, 'manual'))
 
     # ── Nearest upcoming fee due date(s) ───────────────────────────
-    # One entry per distinct upcoming due_date among active fee structures,
-    # not one per classroom, to avoid flooding the list if many classes
-    # share the same due date (the common case).
     fee_dates = (
         FeeStructure.objects.filter(tenant=tenant, is_active=True, due_date__gte=today, due_date__lte=horizon)
         .values_list('due_date', flat=True)
@@ -377,9 +380,7 @@ def upcoming_events(request):
     except Exception:
         pass
 
-    # ── Report card windows (best-effort: next_term_opening_date acts
-    #    as the natural "reports should be ready by" marker on existing
-    #    ReportCard rows for the current academic year) ────────────
+    # ── Report card windows ────────────
     try:
         from academics.models import ReportCard
 

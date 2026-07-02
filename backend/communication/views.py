@@ -9,6 +9,7 @@ from rest_framework.filters import SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.throttling import ScopedRateThrottle
 
 from academics.permissions import IsAdminUser, IsTeacherOrAdmin
 from academics.views.mixins import TenantScopedMixin
@@ -70,6 +71,12 @@ class AnnouncementViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, SearchFilter]
     filterset_fields = ['status', 'recipient_type', 'is_recurring']
     search_fields = ['title', 'body']
+    throttle_scope = 'sms_send'
+
+    def get_throttles(self):
+        if self.action == 'send':
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
 
     def get_permissions(self):
         return [IsTeacherOrAdmin()]
