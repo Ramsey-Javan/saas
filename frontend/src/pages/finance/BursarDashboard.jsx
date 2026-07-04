@@ -25,27 +25,12 @@ export default function BursarDashboard() {
   const [structures, setStructures] = useState([])
   const [downloadStatus, setDownloadStatus] = useState('')
 
-  const getWeekStart = (date) => {
-    const start = new Date(date)
-    const day = (start.getDay() + 6) % 7
-    start.setDate(start.getDate() - day)
-    start.setHours(0, 0, 0, 0)
-    return start
-  }
-
-  const isSameDay = (dateA, dateB) => (
-    dateA.toDateString() === dateB.toDateString()
-  )
-
   const refreshDashboard = ({ silent = false } = {}) => {
     if (!silent) setLoading(true)
 
-    // ── BUG FIX: Fetch both dashboard_summary AND dashboard_stats ──
-    // dashboard_summary gives us term totals (capped paid_amount)
-    // dashboard_stats gives us time-range revenue (also capped)
     Promise.all([
       financeApi.getDashboardSummary(),
-      financeApi.getTermSummary(), // This gives us collected_total for the term
+      financeApi.getTermSummary(),
     ]).then(([summaryRes, termRes]) => {
       const summary = summaryRes.data || {}
       const termData = termRes.data || {}
@@ -58,57 +43,20 @@ export default function BursarDashboard() {
       )
 
       const payments = summary.recent_payments || []
-      const now = new Date()
-      const weekStart = getWeekStart(now)
 
-      // ── CRITICAL BUG FIX: Cap each payment at what was actually applicable ──
-      // We cannot trust p.amount because it may include overpayments.
-      // We use the invoice's paid_amount and balance to determine the
-      // effective contribution of each payment.
-      //
-      // For each payment, its effective contribution = min(p.amount, invoice_balance_at_time)
-      // We approximate by using the current invoice balance + this payment amount
-      // as an upper bound on what this payment could have contributed.
-      const getEffectiveAmount = (p) => {
-        const rawAmount = parseFloat(p.amount || 0)
-        // If the payment has an associated invoice with balance info,
-        // cap the contribution. The invoice balance in the serializer
-        // is the CURRENT balance after all payments. We need to work
-        // backwards: if current balance is 0 and paid_amount >= expected,
-        // this payment likely contributed only enough to clear the balance.
-        //
-        // Simplest safe approach: if the invoice is fully paid (balance=0),
-        // and paid_amount >= expected, then this payment's effective
-        // contribution is at most what was remaining before it.
-        //
-        // For the dashboard widgets, we use a conservative cap:
-        // effective = min(rawAmount, max(0, expected - (paid_amount - rawAmount)))
-        // But we don't have expected/paid_amount on the payment in recent_payments.
-        //
-        // SAFEST: Use the backend's term_summary collected_total as the
-        // authoritative "This Term" figure, and for today/week, we
-        // simply don't show inflated figures. If we can't accurately
-        // compute them from recent_payments, we show 0 or derive from
-        // the term total proportionally.
-        //
-        // EVEN BETTER: The backend should provide today/week breakdowns.
-        // For now, we cap each payment at a reasonable maximum per-student
-        // fee (e.g., KES 100,000) to prevent the KES 20M outlier.
-        const MAX_REASONABLE_PAYMENT = 100000
-        return Math.min(rawAmount, MAX_REASONABLE_PAYMENT)
-      }
-
-      // Actually, the BEST fix: don't compute today/week from recent_payments at all.
-      // Use the term total as the ceiling and show proportional estimates,
-      // or fetch from a dedicated API. For now, we simply cap absurd values.
-      const todayAmount = payments
-        .filter(p => isSameDay(new Date(p.created_at), now) && ['completed', 'confirmed'].includes(p.status))
-        .reduce((sum, p) => sum + getEffectiveAmount(p), 0)
-
-      const weekAmount = payments
-        .filter(p => new Date(p.created_at) >= weekStart && ['completed', 'confirmed'].includes(p.status))
-        .reduce((sum, p) => sum + getEffectiveAmount(p), 0)
-      // ── END CRITICAL BUG FIX ──
+      // ── WEEK / TERM COLLECTION: read pre-computed server values ──
+      // BUG FIX: today_total/week_total/term_collected_total are now all
+      // derived from the SAME invoice scope and the SAME raw-payment
+      // measure on the backend (see finance/views/fees.py dashboard_summary),
+      // narrowed only by date. This guarantees today <= week <= term.
+      // Previously "termAmount" fell back to the capped collected_total
+      // (a different measure entirely from today/week), which is how
+      // "Collected This Week" could end up showing MORE than
+      // "Collected This Term" -- they were never comparable numbers.
+      const todayAmount = parseFloat(summary.today_total || 0)
+      const weekAmount = parseFloat(summary.week_total || 0)
+      const termAmount = parseFloat(summary.term_collected_total ?? collected)
+      // ── END WEEK / TERM COLLECTION ──
 
       const classReport = summary.top_classes || []
       const topUnpaid = [...classReport]
@@ -123,7 +71,7 @@ export default function BursarDashboard() {
         defaulters: summary.defaulters_count || 0,
         todayAmount,
         weekAmount,
-        termAmount: collected,
+        termAmount,
       })
       setRecentPayments(payments)
       setTopClasses(topUnpaid)

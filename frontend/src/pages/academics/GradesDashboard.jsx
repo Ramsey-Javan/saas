@@ -55,6 +55,35 @@ function ImportGradesModal({ classrooms, onClose }) {
   )
 }
 
+// ── Fetch every page from a paginated DRF endpoint ──
+async function fetchAllAssignments(apiMethod, baseParams) {
+  const all = []
+  let page = 1
+  let hasMore = true
+  const MAX_PAGES = 50 // safety guard
+
+  while (hasMore && page <= MAX_PAGES) {
+    const res = await apiMethod({ ...baseParams, page, page_size: 1000 })
+    const data = res.data
+
+    if (Array.isArray(data)) {
+      // non-paginated endpoint
+      all.push(...data)
+      hasMore = false
+    } else if (data?.results && Array.isArray(data.results)) {
+      // standard DRF paginated shape
+      all.push(...data.results)
+      hasMore = !!data.next
+      page += 1
+    } else {
+      // fallback
+      all.push(...listFromResponse(data))
+      hasMore = false
+    }
+  }
+  return all
+}
+
 export default function GradesDashboard() {
   const navigate = useNavigate()
   const user = useAuthStore(state => state.user)
@@ -66,11 +95,36 @@ export default function GradesDashboard() {
   const [importOpen, setImportOpen] = useState(false)
 
   useEffect(() => {
-    const assignmentCall = isAdmin ? academicsApi.getAssignments({ academic_year: filters.academic_year, term: filters.term }) : academicsApi.getMyClasses()
-    Promise.all([assignmentCall, studentsApi.getClassrooms()]).then(([assignRes, classroomRes]) => {
-      setAssignments(listFromResponse(assignRes.data))
-      setClassrooms(listFromResponse(classroomRes.data))
-    }).finally(() => setLoading(false))
+    let cancelled = false
+
+    const load = async () => {
+      setLoading(true)
+      try {
+        const [classroomRes] = await Promise.all([
+          studentsApi.getClassrooms()
+        ])
+        if (!cancelled) setClassrooms(listFromResponse(classroomRes.data))
+
+        let allAssignments = []
+        if (isAdmin) {
+          allAssignments = await fetchAllAssignments(
+            (params) => academicsApi.getAssignments(params),
+            { academic_year: filters.academic_year, term: filters.term }
+          )
+        } else {
+          const res = await academicsApi.getMyClasses()
+          allAssignments = listFromResponse(res.data)
+        }
+        if (!cancelled) setAssignments(allAssignments)
+      } catch (err) {
+        console.error('Failed to load grade assignments', err)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    return () => { cancelled = true }
   }, [isAdmin, filters.academic_year, filters.term])
 
   const grouped = useMemo(() => {

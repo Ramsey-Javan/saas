@@ -95,8 +95,15 @@ def dashboard_stats(request):
 
     money_zero = Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2))
 
-    # ── BUG FIX: Use StudentFee.paid_amount for total revenue, not Payment.amount ──
-    # Payment.amount includes overpayments; paid_amount is capped at what's due.
+    # ── BUG FIX (corrected): total_revenue must be paid_amount + credit, not
+    # paid_amount alone. When a payment exceeds what's due on an invoice,
+    # recalculate_student_fees() (finance/utils.py) caps paid_amount at the
+    # amount due and stashes the surplus in `credit` on the last invoice in
+    # a student's chain. That credit is REAL, CONFIRMED cash already
+    # received -- summing only paid_amount silently excluded it, making
+    # "Total Revenue" read lower than the sum of actual confirmed payments
+    # (same root cause as the Bursar Dashboard "Collected" bug -- see
+    # finance/views/fees.py dashboard_summary()/term_summary()).
     student_fee_qs = StudentFee.objects.filter(tenant=tenant)
     if term_info:
         term, academic_year = term_info
@@ -104,9 +111,11 @@ def dashboard_stats(request):
             fee_structure__term=term,
             fee_structure__academic_year=academic_year,
         )
-    total_revenue = student_fee_qs.aggregate(
-        total=Coalesce(Sum('paid_amount'), money_zero)
-    ).get('total')
+    revenue_totals = student_fee_qs.aggregate(
+        paid_amount_total=Coalesce(Sum('paid_amount'), money_zero),
+        credit_total=Coalesce(Sum('credit'), money_zero),
+    )
+    total_revenue = revenue_totals['paid_amount_total'] + revenue_totals['credit_total']
     # ── END BUG FIX ──
 
     pending_qs = StudentFee.objects.filter(
@@ -124,9 +133,44 @@ def dashboard_stats(request):
         )
     )
 
-    pending_fees = pending_qs.aggregate(
-        total=Coalesce(Sum('balance_due'), money_zero)
-    ).get('total')
+    # ── BUG FIX: pending_fees must NOT sum balance_due (which includes
+    # carried_forward) across multiple invoices. carried_forward is a
+    # snapshot of a PREVIOUS term's own unpaid balance -- if both the old
+    # and new term's invoices are still open, summing balance_due counts
+    # that same arrears twice. This is the exact anti-pattern documented on
+    # outstanding_expression() in finance/views/mixins.py, and it's why
+    # "Pending Fees" here didn't match the Bursar Dashboard's "Outstanding"
+    # figure, which correctly avoids carried_forward when summing (see
+    # raw_expected_expression() / dashboard_summary() in finance/views/fees.py).
+    #
+    # Fix: derive pending_fees the same CF-free way Bursar does --
+    # sum(expected_amount + penalty_amount) - sum(waived_amount) - sum(paid_amount + credit),
+    # across ALL of the tenant's invoices (not just the unpaid/partial/overdue
+    # subset), since that matches what "Outstanding" represents school-wide.
+    # credit is included alongside paid_amount for the same reason as
+    # total_revenue above: it's confirmed cash already received, just not
+    # yet applied to a specific invoice's due amount.
+    pending_totals = StudentFee.objects.filter(tenant=tenant).aggregate(
+        raw_expected=Coalesce(
+            Sum(
+                ExpressionWrapper(
+                    F('expected_amount') + F('penalty_amount'),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            ),
+            money_zero,
+        ),
+        total_waived=Coalesce(Sum('waived_amount'), money_zero),
+        total_paid=Coalesce(Sum('paid_amount'), money_zero),
+        total_credit=Coalesce(Sum('credit'), money_zero),
+    )
+    pending_fees = (
+        pending_totals['raw_expected']
+        - pending_totals['total_waived']
+        - pending_totals['total_paid']
+        - pending_totals['total_credit']
+    )
+    # ── END BUG FIX ──
 
     admissions_this_month = Admission.objects.filter(
         student__tenant=tenant,
@@ -156,45 +200,86 @@ def dashboard_stats(request):
     # We approximate by looking at StudentFee records that had payments this month.
     # For true daily granularity we'd need a payment ledger, but this prevents
     # the overpayment inflation bug.
+    # ── BUG FIX (corrected): include credit alongside paid_amount, same
+    # reasoning as total_revenue above -- confirmed overpayment cash stored
+    # in `credit` was being excluded, understating monthly revenue too.
     revenue_this_month = student_fee_qs.filter(
         updated_at__gte=this_month_start,
         updated_at__lt=next_month_start,
-        paid_amount__gt=0,
-    ).aggregate(total=Coalesce(Sum('paid_amount'), money_zero)).get('total')
+    ).filter(Q(paid_amount__gt=0) | Q(credit__gt=0)).aggregate(
+        total=Coalesce(Sum(F('paid_amount') + F('credit'), output_field=DecimalField(max_digits=12, decimal_places=2)), money_zero)
+    ).get('total')
 
     revenue_last_month = student_fee_qs.filter(
         updated_at__gte=last_month_start,
         updated_at__lt=last_month_end,
-        paid_amount__gt=0,
-    ).aggregate(total=Coalesce(Sum('paid_amount'), money_zero)).get('total')
+    ).filter(Q(paid_amount__gt=0) | Q(credit__gt=0)).aggregate(
+        total=Coalesce(Sum(F('paid_amount') + F('credit'), output_field=DecimalField(max_digits=12, decimal_places=2)), money_zero)
+    ).get('total')
     # ── END BUG FIX ──
 
-    pending_this_month = pending_qs.filter(
-        created_at__gte=this_month_start,
-        created_at__lt=next_month_start,
-    ).aggregate(total=Coalesce(Sum('balance_due'), money_zero)).get('total')
+    # ── BUG FIX: same carried_forward double-counting issue as pending_fees
+    # above -- these were summing balance_due (CF-inclusive) across invoices
+    # created in a given month. Use the same CF-free aggregate, scoped by
+    # created_at, so the trend comparison is internally consistent with the
+    # headline pending_fees figure.
+    def _pending_total_for_range(start, end):
+        totals = StudentFee.objects.filter(
+            tenant=tenant,
+            created_at__gte=start,
+            created_at__lt=end,
+        ).aggregate(
+            raw_expected=Coalesce(
+                Sum(
+                    ExpressionWrapper(
+                        F('expected_amount') + F('penalty_amount'),
+                        output_field=DecimalField(max_digits=12, decimal_places=2),
+                    )
+                ),
+                money_zero,
+            ),
+            total_waived=Coalesce(Sum('waived_amount'), money_zero),
+            total_paid=Coalesce(Sum('paid_amount'), money_zero),
+            total_credit=Coalesce(Sum('credit'), money_zero),
+        )
+        return (
+            totals['raw_expected']
+            - totals['total_waived']
+            - totals['total_paid']
+            - totals['total_credit']
+        )
 
-    pending_last_month = pending_qs.filter(
-        created_at__gte=last_month_start,
-        created_at__lt=last_month_end,
-    ).aggregate(total=Coalesce(Sum('balance_due'), money_zero)).get('total')
+    pending_this_month = _pending_total_for_range(this_month_start, next_month_start)
+    pending_last_month = _pending_total_for_range(last_month_start, last_month_end)
+    # ── END BUG FIX ──
 
     # Payment status breakdown
+    # ── BUG FIX: same missing-credit issue as total_revenue/pending_fees
+    # above. total_paid alone excludes confirmed overpayment cash sitting
+    # in `credit`, which made this section's "Total Amount" (sum of all
+    # status balances) disagree with the Bursar Dashboard's Outstanding.
     payment_status = StudentFee.objects.filter(tenant=tenant).values('status').annotate(
         count=Count('id'),
         total_expected=Coalesce(Sum('expected_amount'), money_zero),
         total_paid=Coalesce(Sum('paid_amount'), money_zero),
+        total_credit=Coalesce(Sum('credit'), money_zero),
         total_waived=Coalesce(Sum('waived_amount'), money_zero),
     ).order_by('status')
 
     payment_status_data = []
     for ps in payment_status:
-        balance = (ps['total_expected'] or 0) - (ps['total_paid'] or 0) - (ps['total_waived'] or 0)
+        balance = (
+            (ps['total_expected'] or 0)
+            - (ps['total_paid'] or 0)
+            - (ps['total_credit'] or 0)
+            - (ps['total_waived'] or 0)
+        )
         payment_status_data.append({
             'name': ps['status'],
             'value': ps['count'],
             'amount': float(max(balance, 0)),
         })
+    # ── END BUG FIX ──
 
     # Enrollment by grade
     enrollment_by_grade = Classroom.objects.filter(tenant=tenant).annotate(
@@ -208,17 +293,45 @@ def dashboard_stats(request):
             'count': e['count'],
         })
 
-    # ── BUG FIX: Fee trends using capped paid_amount instead of raw Payment.amount ──
-    # We use TruncMonth on StudentFee.updated_at as a proxy for when payments were applied.
+    # ── BUG FIX: "expected" was a placeholder heuristic (collected * 1.1),
+    # not a real figure -- it could never match the true Total Expected
+    # shown on the Bursar Dashboard, and would mislead anyone reading the
+    # chart (e.g. in a demo). Fix: "expected" is now the true term-wide
+    # total (expected_amount + penalty_amount - waived_amount, summed
+    # across ALL of the current term's invoices, matching the Bursar
+    # Dashboard's Net Collectible) -- the same flat figure every month,
+    # since the whole term's invoices exist from day one regardless of
+    # when payments trickle in. Only "collected" varies month to month.
+    term_expected_totals = student_fee_qs.aggregate(
+        raw_expected=Coalesce(
+            Sum(
+                ExpressionWrapper(
+                    F('expected_amount') + F('penalty_amount'),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            ),
+            money_zero,
+        ),
+        total_waived=Coalesce(Sum('waived_amount'), money_zero),
+    )
+    term_wide_expected = term_expected_totals['raw_expected'] - term_expected_totals['total_waived']
+
     range_start, range_end = _get_time_range_bounds(time_range, now_local)
     fee_trends = student_fee_qs.filter(
         updated_at__gte=range_start,
         updated_at__lte=range_end,
-        paid_amount__gt=0,
-    ).annotate(
+    ).filter(Q(paid_amount__gt=0) | Q(credit__gt=0)).annotate(
         month=TruncMonth('updated_at')
     ).values('month').annotate(
-        collected=Coalesce(Sum('paid_amount'), money_zero)
+        collected=Coalesce(
+            Sum(
+                ExpressionWrapper(
+                    F('paid_amount') + F('credit'),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            ),
+            money_zero,
+        ),
     ).order_by('month')
     # ── END BUG FIX ──
 
@@ -227,7 +340,7 @@ def dashboard_stats(request):
         fee_trends_data.append({
             'label': ft['month'].strftime('%b'),
             'collected': float(ft['collected'] or 0),
-            'expected': float(ft['collected'] or 0) * 1.1,
+            'expected': float(term_wide_expected or 0),
         })
 
     # Top defaulters

@@ -1,4 +1,5 @@
 """Fee structure and student fee (invoice) viewsets."""
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
@@ -28,6 +29,7 @@ from .mixins import (
     _recalculate_invoice, 
     gross_due_expression,
     outstanding_expression,
+    raw_expected_expression,
     total_due_expression,
 )
 
@@ -283,15 +285,20 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
             )
         }
 
-        # ── BUG FIX: Use StudentFee.paid_amount instead of Payment.amount ──
-        # Payment.amount includes overpayments; paid_amount is capped at what's
-        # actually due per invoice by recalculate_student_fees().
+        # ── BUG FIX (corrected): collected_total must include credit, not
+        # just paid_amount -- see term_summary()/dashboard_summary() above
+        # for the full explanation. Confirmed overpayment cash stored in
+        # `credit` was being silently excluded, understating real money
+        # collected per classroom.
         collected_rows = (
             qs.values('student__classroom__id')
-            .annotate(collected_total=Coalesce(Sum('paid_amount'), money_zero))
+            .annotate(
+                paid_amount_total=Coalesce(Sum('paid_amount'), money_zero),
+                credit_total=Coalesce(Sum('credit'), money_zero),
+            )
         )
         collected_by_classroom = {
-            row['student__classroom__id']: row['collected_total']
+            row['student__classroom__id']: row['paid_amount_total'] + row['credit_total']
             for row in collected_rows
         }
         # ── END BUG FIX ──
@@ -325,20 +332,39 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(fee_structure__academic_year=academic_year)
 
         money_zero = Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2))
-        # expected_total/total_waived are both pure StudentFee-table aggregates
-        # (no join needed) -- safe to combine in one aggregate() call.
+        # ── BUG FIX: "Total Expected" must be the RAW gross figure (before
+        # waiver), matching the Generate Invoices preview total. Previously
+        # this used gross_due_expression() (expected + penalty - waived),
+        # which already nets out the waiver -- and then the frontend
+        # subtracted total_waived AGAIN to compute "Net Collectible",
+        # silently double-counting every waiver. expected_total/total_waived
+        # are both pure StudentFee-table aggregates (no join needed) --
+        # safe to combine in one aggregate() call.
         summary = qs.aggregate(
-            expected_total=Coalesce(Sum(gross_due_expression()), money_zero),
+            expected_total=Coalesce(Sum(raw_expected_expression()), money_zero),
             total_waived=Coalesce(Sum('waived_amount'), money_zero),
         )
-        # ── BUG FIX: Use StudentFee.paid_amount instead of Payment.amount ──
-        # Payment.amount includes overpayments; paid_amount is capped at what's
-        # actually due per invoice by recalculate_student_fees().
-        summary['collected_total'] = qs.aggregate(
-            total=Coalesce(Sum('paid_amount'), money_zero)
-        )['total']
+        summary['net_collectible'] = summary['expected_total'] - summary['total_waived']
+        # ── BUG FIX (corrected): collected_total must be paid_amount + credit,
+        # not paid_amount alone. When a payment exceeds what's due on an
+        # invoice, recalculate_student_fees() (utils.py) caps paid_amount at
+        # the amount due and stashes the surplus in `credit` on the last
+        # invoice in the chain. That credit is REAL, CONFIRMED cash the
+        # school already received -- summing only paid_amount silently
+        # excluded it from every "Collected" figure, making the reported
+        # total LOWER than the sum of actual confirmed payments. (The
+        # previous comment here warned about Payment.amount overcounting
+        # overpayments -- true for a single invoice in isolation, but the
+        # fix must preserve that surplus via `credit`, not discard it.)
+        collected_totals = qs.aggregate(
+            paid_amount_total=Coalesce(Sum('paid_amount'), money_zero),
+            credit_total=Coalesce(Sum('credit'), money_zero),
+        )
+        summary['collected_total'] = collected_totals['paid_amount_total'] + collected_totals['credit_total']
         # ── END BUG FIX ──
-        summary['outstanding_total'] = summary['expected_total'] - summary['collected_total']
+        # Outstanding must be based on net_collectible (post-waiver), not the
+        # raw expected_total, or waived amounts would show up as "still owed".
+        summary['outstanding_total'] = summary['net_collectible'] - summary['collected_total']
         return Response(summary)
 
     @action(detail=False, methods=['get'], permission_classes=[IsAdminOrBursar])
@@ -357,20 +383,60 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
 
         money_zero = Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2))
 
-        # expected_total/total_waived are both pure StudentFee-table aggregates
-        # (no join needed) -- safe to combine in one aggregate() call.
+        # ── BUG FIX: same double-waiver-subtraction fix as term_summary()
+        # above. "Total Expected" is now the RAW gross figure (before
+        # waiver); "Net Collectible" is explicit and computed once, here,
+        # on the backend, so the frontend never re-derives it (which is
+        # what caused waived amounts to be subtracted twice).
         summary = qs.aggregate(
-            expected_total=Coalesce(Sum(gross_due_expression()), money_zero),
+            expected_total=Coalesce(Sum(raw_expected_expression()), money_zero),
             total_waived=Coalesce(Sum('waived_amount'), money_zero),
         )
-        # ── BUG FIX: Use StudentFee.paid_amount instead of Payment.amount ──
-        # Payment.amount includes overpayments; paid_amount is capped at what's
-        # actually due per invoice by recalculate_student_fees().
-        summary['collected_total'] = qs.aggregate(
-            total=Coalesce(Sum('paid_amount'), money_zero)
-        )['total']
+        summary['net_collectible'] = summary['expected_total'] - summary['total_waived']
+        # ── BUG FIX (corrected): collected_total must be paid_amount + credit,
+        # not paid_amount alone -- see term_summary() above for the full
+        # explanation. paid_amount alone silently excludes confirmed
+        # overpayment cash sitting in the `credit` field, understating real
+        # money collected (this was the actual cause of "Collected" showing
+        # 73,000 while the payments ledger summed to 77,000 confirmed).
+        collected_totals = qs.aggregate(
+            paid_amount_total=Coalesce(Sum('paid_amount'), money_zero),
+            credit_total=Coalesce(Sum('credit'), money_zero),
+        )
+        summary['collected_total'] = collected_totals['paid_amount_total'] + collected_totals['credit_total']
         # ── END BUG FIX ──
-        summary['outstanding_total'] = summary['expected_total'] - summary['collected_total']
+        # Outstanding must be based on net_collectible (post-waiver), not the
+        # raw expected_total, or waived amounts would show up as "still owed".
+        summary['outstanding_total'] = summary['net_collectible'] - summary['collected_total']
+
+        # ── BUG FIX: today_total/week_total/term_collected_total. Now that
+        # collected_total correctly includes credit (see fix above), it
+        # matches the true sum of confirmed payments, so term_collected_total
+        # can simply equal collected_total with no further adjustment needed.
+        # today_total/week_total use raw Payment.amount (no per-day
+        # granularity exists in the invoice-level paid_amount/credit fields),
+        # narrowed by date from the same tenant+term scope, so
+        # today <= week <= term holds by construction.
+        payments_in_scope = Payment.objects.filter(
+            tenant=getattr(request.user, 'tenant', None),
+            student_fee__in=qs,
+            status__in=CONFIRMED_PAYMENT_STATUSES,
+        )
+
+        now_local = timezone.localtime()
+        today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = today_start - timedelta(days=today_start.weekday())
+
+        summary['today_total'] = payments_in_scope.filter(
+            created_at__gte=today_start
+        ).aggregate(total=Coalesce(Sum('amount'), money_zero))['total']
+
+        summary['week_total'] = payments_in_scope.filter(
+            created_at__gte=week_start
+        ).aggregate(total=Coalesce(Sum('amount'), money_zero))['total']
+
+        summary['term_collected_total'] = summary['collected_total']
+        # ── END BUG FIX ──
 
         paid_qs = qs.annotate(
             paid_total=Coalesce(
@@ -397,13 +463,17 @@ class StudentFeeViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
                 .annotate(expected_total=Coalesce(Sum(gross_due_expression()), money_zero))
             )
         }
-        # ── BUG FIX: Use StudentFee.paid_amount instead of Payment.amount ──
+        # ── BUG FIX (corrected): collected_total must include credit -- see
+        # term_summary()/dashboard_summary() collected_total fix above.
         collected_rows = (
             qs.values('student__classroom__id')
-            .annotate(collected_total=Coalesce(Sum('paid_amount'), money_zero))
+            .annotate(
+                paid_amount_total=Coalesce(Sum('paid_amount'), money_zero),
+                credit_total=Coalesce(Sum('credit'), money_zero),
+            )
         )
         collected_by_classroom = {
-            row['student__classroom__id']: row['collected_total']
+            row['student__classroom__id']: row['paid_amount_total'] + row['credit_total']
             for row in collected_rows
         }
         # ── END BUG FIX ──

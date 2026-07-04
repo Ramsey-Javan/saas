@@ -184,6 +184,7 @@ class LearningOutcomeViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
 
 class ClassSubjectAssignmentViewSet(TenantScopedMixin, viewsets.ModelViewSet):
+    pagination_class = None
     queryset = ClassSubjectAssignment.objects.select_related('classroom', 'subject', 'teacher').order_by(
         '-academic_year', 'term', 'classroom__name', 'subject__name'
     )
