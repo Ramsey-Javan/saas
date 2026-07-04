@@ -124,6 +124,25 @@ def total_due_expression():
     )
 
 
+def raw_expected_expression():
+    """
+    The TRUE gross fee obligation BEFORE any waiver is applied:
+      expected_amount + penalty_amount (carried_forward and waived_amount both excluded).
+
+    Use this for a "Total Expected" figure that should match what was billed
+    at invoice-generation time (e.g. the Generate Invoices preview total).
+    Do NOT use this for "how much is actually collectible" -- for that,
+    subtract total_waived from the sum of this expression (see dashboard_summary()).
+
+    Safe to Sum() across any number of invoices/students/terms, same
+    caveats as gross_due_expression() below re: carried_forward.
+    """
+    return ExpressionWrapper(
+        F('expected_amount') + F('penalty_amount'),
+        output_field=DecimalField(max_digits=12, decimal_places=2),
+    )
+
+
 def gross_due_expression():
     """
     The TRUE per-invoice fee obligation, EXCLUDING carried_forward.
