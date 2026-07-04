@@ -44,11 +44,22 @@ export default function PaymentStatusChart({ data, compact = false }) {
       ]
     }
     const total = data.reduce((sum, d) => sum + d.value, 0)
-    return data.map(d => ({
-      ...d,
-      color: COLORS[d.name] || '#9ca3af',
-      percentage: total > 0 ? Math.round((d.value / total) * 100) : 0,
-    }))
+    return data.map(d => {
+      // ── BUG FIX: Math.round((d.value / total) * 100) rounds any share
+      // under 0.5% down to a flat 0 -- e.g. 4/958 = 0.42% displayed as
+      // "0%", making a real, nonzero status look like it has no data at
+      // all. Keep one decimal place instead so small-but-real shares
+      // (Paid: 4/958, Partial: 1/958) still show as 0.4% / 0.1% rather
+      // than vanishing. Math.round(...*1000)/10 avoids floating-point
+      // artifacts that toFixed(1) alone doesn't fully guard against.
+      const rawPercentage = total > 0 ? (d.value / total) * 100 : 0
+      const percentage = total > 0 ? Math.round(rawPercentage * 10) / 10 : 0
+      return {
+        ...d,
+        color: COLORS[d.name] || '#9ca3af',
+        percentage,
+      }
+    })
   }, [data])
 
   const totalStudents = chartData.reduce((sum, d) => sum + d.value, 0)

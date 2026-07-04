@@ -5,7 +5,7 @@ import {
   MessageSquare, LayoutDashboard, LogOut,
   Menu, ChevronRight, Settings, AlertCircle, FilePlus,
   CheckSquare, FileText, Calendar, ClipboardList, Award, Globe,
-  Search, Command, Crown
+  Search, Command, Crown, Key
 } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { cn } from '@/lib/utils'
@@ -189,7 +189,7 @@ export default function AppShell({ children }) {
         ))}
       </nav>
 
-      {/* User + logout */}
+      {/* User + change password + logout */}
       <div className="p-3 border-t border-gray-100">
         {!collapsed && (
           <div className="px-3 py-2 mb-1">
@@ -199,6 +199,19 @@ export default function AppShell({ children }) {
             <p className="text-xs text-gray-500 capitalize">{user?.role}</p>
           </div>
         )}
+        <NavLink
+          to="/settings/change-password"
+          onClick={() => setMobileOpen(false)}
+          className={({ isActive }) => cn(
+            'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all w-full mb-1',
+            isActive
+              ? 'bg-[var(--brand-primary)] text-white'
+              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+          )}
+        >
+          <Key size={18} />
+          {!collapsed && <span>Change Password</span>}
+        </NavLink>
         <button
           onClick={handleLogout}
           className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-600 hover:bg-red-50 hover:text-red-600 transition-all w-full"

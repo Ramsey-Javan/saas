@@ -40,8 +40,9 @@ import {
   NotificationsPage,
 } from '@/pages/communication'
 import { StaffListPage, AddStaffPage, StaffDetailPage, EditStaffPage } from '@/pages/staff'
-import { SchoolProfileSettingsPage } from '@/pages/settings'
+import { SchoolProfileSettingsPage, ChangePasswordSettingsPage } from '@/pages/settings'
 import { SuperadminDashboard, PlatformSchoolDetailPage } from '@/pages/platform'
+import { ForgotPasswordPage, ResetPasswordPage } from '@/pages/auth'
 import { PublicSignupPage } from '@/pages/public'
 import AcceptInvitePage from '@/pages/auth/AcceptInvitePage'
 import AppShell from '@/components/layout/AppShell'
@@ -118,6 +119,9 @@ export default function App() {
         <Route path="/platform" element={<ProtectedShell allowedRoles={['superadmin']}><SuperadminDashboard /></ProtectedShell>} />
         <Route path="/platform/schools" element={<ProtectedShell allowedRoles={['superadmin']}><SuperadminDashboard /></ProtectedShell>} />
         <Route path="/platform/schools/:id" element={<ProtectedShell allowedRoles={['superadmin']}><PlatformSchoolDetailPage /></ProtectedShell>} />
+        <Route path="/settings/change-password" element={<ChangePasswordSettingsPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

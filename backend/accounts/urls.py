@@ -1,26 +1,34 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
-    AcceptInviteView,
     CustomTokenObtainPairView,
+    UserViewSet,
+    StaffProfileViewSet,
+    StaffInviteViewSet,
+    AcceptInviteView,
     InviteCheckView,
     SchoolProfileView,
-    StaffInviteViewSet,
-    StaffProfileViewSet,
-    UserViewSet,
+    PasswordResetRequestView,
+    PasswordResetCheckView,
+    PasswordResetConfirmView,
 )
 
 router = DefaultRouter()
-router.register(r'users', UserViewSet, basename='user')
-router.register(r'staff', StaffProfileViewSet, basename='staff')
-router.register(r'staff-invites', StaffInviteViewSet, basename='staffinvite')
+router.register('users', UserViewSet, basename='users')
+router.register('staff-profiles', StaffProfileViewSet, basename='staff-profiles')
+router.register('staff-invites', StaffInviteViewSet, basename='staff-invites')
 
 urlpatterns = [
     path('token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('token/refresh/', CustomTokenObtainPairView.as_view(), name='token_refresh'),
+    path('token/verify/', CustomTokenObtainPairView.as_view(), name='token_verify'),
+    path('register/', AcceptInviteView.as_view(), name='register'),
+    path('logout/', AcceptInviteView.as_view(), name='logout'),
+    path('school-profile/', SchoolProfileView.as_view(), name='school-profile'),
     path('accept-invite/', AcceptInviteView.as_view(), name='accept-invite'),
     path('invite-check/', InviteCheckView.as_view(), name='invite-check'),
-    path('school-profile/', SchoolProfileView.as_view(), name='school-profile'),
+    path('password-reset-request/', PasswordResetRequestView.as_view(), name='password-reset-request'),
+    path('password-reset-check/', PasswordResetCheckView.as_view(), name='password-reset-check'),
+    path('password-reset-confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
     path('', include(router.urls)),
 ]
