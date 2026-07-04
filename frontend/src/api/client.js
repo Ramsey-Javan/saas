@@ -6,14 +6,7 @@ function getBaseURL() {
   if (import.meta.env.VITE_API_URL) {
     return `${import.meta.env.VITE_API_URL}/api`
   }
-  const hostname = window.location.hostname
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return '/api'
-  }
-  const parts = hostname.split('.')
-  if (parts.length >= 3) {
-    return `https://${hostname}/api`
-  }
+  // Use relative path so Vercel rewrites handle proxying to the backend
   return '/api'
 }
 
@@ -58,7 +51,7 @@ api.interceptors.response.use(
         return Promise.reject(error)
       }
       try {
-        const { data } = await axios.post(`${getBaseURL()}/auth/token/refresh/`, {
+        const { data } = await axios.post(`/api/auth/token/refresh/`, {
           refresh: refreshToken,
         })
         const newAccess = data.access
