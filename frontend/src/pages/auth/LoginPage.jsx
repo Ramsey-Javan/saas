@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom' // Added Link import here
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -181,6 +181,16 @@ export default function LoginPage() {
                 {errors.password && (
                   <p className="mt-1 text-xs text-red-600">{errors.password.message}</p>
                 )}
+              </div>
+
+              {/* Forgot Password Link */}
+              <div className="text-right">
+                <Link
+                  to="/forgot-password"
+                  className="text-xs font-medium text-[var(--brand-primary)] hover:underline"
+                >
+                  Forgot password?
+                </Link>
               </div>
 
               {/* Submit */}
