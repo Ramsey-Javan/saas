@@ -3,6 +3,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://schoolsaas.duckdns.org/api/:path*"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
     }
   ]
 }
