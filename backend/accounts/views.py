@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
@@ -139,6 +140,7 @@ class StaffProfileViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
             method = data['onboarding_method']
             if method == 'direct':
+                real_email_provided = bool(data.get('email'))
                 email = data.get('email') or f"{profile.employee_number.lower().replace('/', '-')}@staff.local"
                 new_user = CustomUser.objects.create_user(
                     email=email,
@@ -154,10 +156,26 @@ class StaffProfileViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 profile.email = email
                 profile.save(update_fields=['user', 'email', 'updated_at'])
 
+                # Email the temp password + a clear change-password
+                # instruction, rather than relying solely on the admin to
+                # manually relay it. Only attempt this when a REAL email
+                # address was provided -- the auto-generated
+                # "employeeno@staff.local" fallback isn't a deliverable
+                # address, so sending to it would just fail silently.
+                email_sent = False
+                if real_email_provided:
+                    email_sent = self._send_direct_account_email(new_user, data['temp_password'], tenant)
+
+                message = 'Staff account created.'
+                if email_sent:
+                    message += f' Login details were emailed to {email}.'
+                else:
+                    message += ' Share the temporary password with them directly.'
+
                 return Response({
                     'staff': StaffProfileSerializer(profile).data,
                     'login_email': new_user.email,
-                    'message': 'Staff account created. Share the temporary password with them directly.',
+                    'message': message,
                 }, status=status.HTTP_201_CREATED)
 
             if method == 'invite':
@@ -180,10 +198,49 @@ class StaffProfileViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 'message': 'Staff profile created without login access.',
             }, status=status.HTTP_201_CREATED)
 
+    def _send_direct_account_email(self, user, temp_password, tenant):
+        """
+        Email a directly-onboarded staff member their login email and
+        temporary password, with a clear instruction to change it after
+        logging in (via the self-service Change Password page). Returns
+        True/False so the caller can adjust its response message rather
+        than assuming the email went out. Never raises -- a failed email
+        here shouldn't roll back the account that was already created.
+        """
+        from communication.services import EmailService
+
+        login_url = f'{settings.FRONTEND_URL.rstrip("/")}/login'
+        try:
+            EmailService().send(
+                [user.email],
+                subject=f'Your account for {tenant.name}',
+                body=(
+                    f"An account has been created for you at {tenant.name}.\n\n"
+                    f"Login email: {user.email}\n"
+                    f"Temporary password: {temp_password}\n\n"
+                    f"Log in here: {login_url}\n\n"
+                    f"For security, please change this password as soon as you log in "
+                    f"(look for \"Change Password\" in the sidebar)."
+                ),
+            )
+            return True
+        except Exception as exc:
+            logger.error('Direct-onboarding account email failed: %s', exc, exc_info=True)
+            return False
+
     def _send_invite_email(self, request, invite):
         from communication.services import EmailService
 
-        origin = request.build_absolute_uri('/').rstrip('/')
+        # ── BUG FIX: request.build_absolute_uri() reflects whatever host
+        # the API request itself came in on -- since the browser calls the
+        # backend directly for this POST, that was the backend/Nginx
+        # domain (e.g. schoolsaas.duckdns.org), not the frontend Vercel
+        # app where /accept-invite actually lives. The link was pointing
+        # to a page that doesn't exist on that domain at all, and the raw
+        # non-HTTPS-trusted-looking link is likely also why it landed in
+        # spam. Use an explicit FRONTEND_URL setting instead of guessing
+        # from the request.
+        origin = settings.FRONTEND_URL.rstrip('/')
         invite_url = f'{origin}/accept-invite?token={invite.token}'
         EmailService().send(
             [invite.email],
@@ -522,7 +579,10 @@ class PasswordResetRequestView(APIView):
                 uid = urlsafe_base64_encode(force_bytes(user.pk))
 
                 from communication.services import EmailService
-                origin = request.build_absolute_uri('/').rstrip('/')
+                # ── BUG FIX: same issue as _send_invite_email above --
+                # request.build_absolute_uri() pointed at the backend
+                # domain, not the frontend where /reset-password lives.
+                origin = settings.FRONTEND_URL.rstrip('/')
                 reset_url = f'{origin}/reset-password?uid={uid}&token={token}'
 
                 EmailService().send(
