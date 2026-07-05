@@ -15,7 +15,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register('users', UserViewSet, basename='users')
-router.register('staff-profiles', StaffProfileViewSet, basename='staff-profiles')
+router.register('staff', StaffProfileViewSet, basename='staff')
 router.register('staff-invites', StaffInviteViewSet, basename='staff-invites')
 
 urlpatterns = [
