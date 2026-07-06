@@ -97,22 +97,16 @@ class PaymentViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
         amount = data['amount']
 
-        # ── BUG FIX: Prevent overpayment beyond current balance ──
-        # If invoice already has credit from previous terms, allow paying up to
-        # balance + credit. Otherwise cap at current balance.
-        current_balance = invoice.balance
-        current_credit = invoice.credit
-        max_payable = current_balance + current_credit
-
-        if amount > max_payable:
-            raise ValidationError({
-                'amount': (
-                    f'Payment of KES {amount:,.2f} exceeds the maximum payable amount of '
-                    f'KES {max_payable:,.2f} for this invoice. '
-                    f'(Balance: KES {current_balance:,.2f}, Available credit: KES {current_credit:,.2f})'
-                )
-            })
-        # ── END BUG FIX ──
+        # ── BUG FIX (reverted): this used to hard-reject any amount above
+        # balance + credit. That directly contradicted the payment modal's
+        # own messaging ("excess will be credited to the next term") --
+        # overpayment isn't an error, it's a supported feature.
+        # recalculate_student_fees() (finance/utils.py) already caps
+        # paid_amount at what's actually due per invoice and rolls any
+        # surplus into `credit`, cascading correctly into future terms'
+        # invoices. Blocking it here just prevented a legitimate cash
+        # payment (e.g. a parent paying a full year upfront) from ever
+        # being recorded at all.
 
         payment_status = 'confirmed' if data['method'] in ('cash', 'bank') else 'pending'
         payment = Payment.objects.create(
@@ -414,20 +408,10 @@ class MpesaViewSet(viewsets.ViewSet):
             if student_fee.student_id != student.id:
                 raise ValidationError({'student_fee': 'Invoice does not belong to the selected student.'})
 
-        # ── BUG FIX: Prevent M-Pesa overpayment ──
-        if student_fee:
-            current_balance = student_fee.balance
-            current_credit = student_fee.credit
-            max_payable = current_balance + current_credit
-            if data['amount'] > max_payable:
-                raise ValidationError({
-                    'amount': (
-                        f'Payment of KES {data["amount"]:,.2f} exceeds the maximum payable amount of '
-                        f'KES {max_payable:,.2f} for this invoice. '
-                        f'(Balance: KES {current_balance:,.2f}, Available credit: KES {current_credit:,.2f})'
-                    )
-                })
-        # ── END BUG FIX ──
+        # ── BUG FIX (reverted): same as manual() above -- overpayment is
+        # a supported feature (excess becomes credit via
+        # recalculate_student_fees()), not an error state. Removed the
+        # hard cap that blocked legitimate M-Pesa overpayments.
 
         phone = self._normalize_phone(data['phone'])
         local_checkout_id = str(uuid.uuid4())

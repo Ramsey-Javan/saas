@@ -86,21 +86,20 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
     window.URL.revokeObjectURL(url)
   }
 
-  // ── BUG FIX: Helper to validate amount against balance ──
+  // ── BUG FIX (reverted): the previous version capped amount at
+  // balance + credit and rejected anything higher. That directly
+  // contradicted this same modal's own helper text ("Any excess beyond
+  // the balance will be credited to the next term") -- overpayment isn't
+  // an error state, it's a fully-supported feature. recalculate_student_fees()
+  // on the backend already caps paid_amount at what's due and rolls the
+  // surplus into `credit`, cascading correctly to future invoices. The
+  // only thing worth validating client-side is that the amount is a
+  // real, positive number -- the backend is the source of truth for
+  // anything more nuanced.
   const validateAmount = (amount) => {
-    const balance = parseFloat(fee?.effective_balance ?? fee?.balance ?? 0)
-    const credit = parseFloat(fee?.credit ?? 0)
-    const maxPayable = balance + credit
     const numAmount = parseFloat(amount)
-
     if (isNaN(numAmount) || numAmount <= 0) {
       return 'Please enter a valid positive amount.'
-    }
-    if (numAmount > maxPayable) {
-      return (
-        `Amount exceeds the maximum payable of KES ${maxPayable.toLocaleString()}. ` +
-        `(Balance: KES ${balance.toLocaleString()}, Credit: KES ${credit.toLocaleString()})`
-      )
     }
     return null
   }
@@ -114,14 +113,12 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
 
     const rawAmount = method === 'cash' ? cashAmount : method === 'bank' ? bankAmount : chequeAmount
 
-    // ── BUG FIX: Client-side validation before API call ──
     const validationError = validateAmount(rawAmount)
     if (validationError) {
       setError(validationError)
       setLoading(false)
       return
     }
-    // ── END BUG FIX ──
 
     try {
       const payload = {
@@ -206,13 +203,26 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
     </button>
   )
 
-  // ── BUG FIX: Compute max payable for display ──
-  const maxPayableDisplay = () => {
-    const balance = parseFloat(fee?.effective_balance ?? fee?.balance ?? 0)
-    const credit = parseFloat(fee?.credit ?? 0)
-    return balance + credit
+  // ── BUG FIX (reverted): this was labeled "maximum payable" but that
+  // framing no longer applies now that overpayment is allowed -- it's
+  // just the current balance. Kept as a helper display of the balance
+  // itself, not a hard ceiling.
+  const currentBalanceDisplay = () => {
+    return parseFloat(fee?.effective_balance ?? fee?.balance ?? 0)
   }
   // ── END BUG FIX ──
+
+  // Live "you're paying extra" notice -- reacts to whatever amount is
+  // currently typed in, rather than only being visible after the fact on
+  // the success screen. Returns null when the amount is at or under the
+  // balance (nothing extra to flag).
+  const overpaymentNotice = (amountValue) => {
+    const balance = currentBalanceDisplay()
+    const numAmount = parseFloat(amountValue)
+    if (isNaN(numAmount) || numAmount <= balance) return null
+    const excess = numAmount - balance
+    return `You're paying KES ${excess.toLocaleString()} more than the balance. This extra amount will be carried forward as credit to the next term.`
+  }
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -255,12 +265,15 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
                   value={cashAmount}
                   onChange={e => setCashAmount(e.target.value)}
                 />
-                {/* ── BUG FIX: Updated helper text ── */}
                 <p className="text-xs text-gray-500 -mt-2">
-                  Maximum payable: KES {maxPayableDisplay().toLocaleString()}.
-                  Any excess beyond the balance will be credited to the next term.
+                  Current balance: KES {currentBalanceDisplay().toLocaleString()}.
+                  Any amount paid beyond the balance will be credited to the next term.
                 </p>
-                {/* ── END BUG FIX ── */}
+                {overpaymentNotice(cashAmount) && (
+                  <div className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 px-3 py-2 rounded-lg -mt-1">
+                    <Info size={14} className="flex-shrink-0" /> {overpaymentNotice(cashAmount)}
+                  </div>
+                )}
                 <Input
                   label="Date"
                   type="date"
@@ -309,12 +322,15 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
                   value={bankAmount}
                   onChange={e => setBankAmount(e.target.value)}
                 />
-                {/* ── BUG FIX: Updated helper text ── */}
                 <p className="text-xs text-gray-500 -mt-2">
-                  Maximum payable: KES {maxPayableDisplay().toLocaleString()}.
-                  Any excess beyond the balance will be credited to the next term.
+                  Current balance: KES {currentBalanceDisplay().toLocaleString()}.
+                  Any amount paid beyond the balance will be credited to the next term.
                 </p>
-                {/* ── END BUG FIX ── */}
+                {overpaymentNotice(bankAmount) && (
+                  <div className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 px-3 py-2 rounded-lg -mt-1">
+                    <Info size={14} className="flex-shrink-0" /> {overpaymentNotice(bankAmount)}
+                  </div>
+                )}
                 <Input
                   label="Date"
                   type="date"
@@ -368,12 +384,15 @@ export default function PaymentModal({ isOpen, onClose, student, fee, onSuccess 
                   value={chequeAmount}
                   onChange={e => setChequeAmount(e.target.value)}
                 />
-                {/* ── BUG FIX: Updated helper text ── */}
                 <p className="text-xs text-gray-500 -mt-2">
-                  Maximum payable: KES {maxPayableDisplay().toLocaleString()}.
-                  Any excess beyond the balance will be credited to the next term.
+                  Current balance: KES {currentBalanceDisplay().toLocaleString()}.
+                  Any amount paid beyond the balance will be credited to the next term.
                 </p>
-                {/* ── END BUG FIX ── */}
+                {overpaymentNotice(chequeAmount) && (
+                  <div className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 px-3 py-2 rounded-lg -mt-1">
+                    <Info size={14} className="flex-shrink-0" /> {overpaymentNotice(chequeAmount)}
+                  </div>
+                )}
                 <Input
                   label="Cheque Date"
                   type="date"
