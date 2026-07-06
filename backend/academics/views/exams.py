@@ -132,29 +132,58 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         total_synced = 0
         total_skipped = 0
 
+        # OPTIMIZATION 1: Pre-fetch all strands grouped by subject (not per result)
+        subject_ids = list(results.values_list('exam_subject__subject_id', flat=True).distinct())
+        strands_qs = Strand.objects.filter(
+            subject_id__in=subject_ids,
+            subject__tenant=tenant,
+        ).order_by('order').prefetch_related(
+            'sub_strands__outcomes'
+        )
+
+        subject_strands = {}
+        for strand in strands_qs:
+            subject_strands.setdefault(strand.subject_id, []).append(strand)
+
+        # OPTIMIZATION 2: Bulk check existing CBCGrades once, use set for O(1) lookups
+        student_ids = list(results.values_list('student_id', flat=True).distinct())
+        all_outcome_ids = set()
+        for strand in strands_qs:
+            for sub_strand in strand.sub_strands.all():
+                for outcome in sub_strand.outcomes.all():
+                    all_outcome_ids.add(outcome.id)
+
+        existing_keys = set(
+            CBCGrade.objects.filter(
+                tenant=tenant,
+                term=exam.term,
+                academic_year=exam.academic_year,
+                student_id__in=student_ids,
+                learning_outcome_id__in=all_outcome_ids,
+            ).values_list('student_id', 'learning_outcome_id')
+        )
+
         with transaction.atomic():
             for result in results:
                 subject = result.exam_subject.subject
                 exam_level = result.cbc_level
+                strands = subject_strands.get(subject.id, [])
 
-                strands = Strand.objects.filter(
-                    subject=subject,
-                    subject__tenant=tenant,
-                ).order_by('order').prefetch_related('sub_strands__outcomes')
-
-                if not strands.exists():
+                if not strands:
                     continue
 
                 strand_levels = assign_strand_levels(
                     exam_level=exam_level,
-                    strands=list(strands),
+                    strands=strands,
                 )
 
                 for strand in strands:
                     strand_level = strand_levels.get(strand.id, exam_level)
 
-                    for sub_strand in strand.sub_strands.order_by('order').prefetch_related('outcomes'):
-                        outcomes = list(sub_strand.outcomes.order_by('order'))
+                    # OPTIMIZATION 3: Use already-prefetched sub_strands (no extra query)
+                    for sub_strand in strand.sub_strands.all():
+                        # OPTIMIZATION 4: Use already-prefetched outcomes (no extra query)
+                        outcomes = list(sub_strand.outcomes.all())
                         outcome_levels = assign_outcome_levels(
                             strand_level=strand_level,
                             outcomes=outcomes,
@@ -163,15 +192,8 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                         for outcome in outcomes:
                             outcome_level = outcome_levels.get(outcome.id, strand_level)
 
-                            exists = CBCGrade.objects.filter(
-                                tenant=tenant,
-                                student=result.student,
-                                learning_outcome=outcome,
-                                term=exam.term,
-                                academic_year=exam.academic_year,
-                            ).exists()
-
-                            if exists:
+                            # OPTIMIZATION 5: O(1) set lookup instead of DB .exists()
+                            if (result.student_id, outcome.id) in existing_keys:
                                 total_skipped += 1
                                 continue
 
@@ -196,6 +218,8 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                                 assessed_by=request.user,
                             )
                             total_synced += 1
+                            # Track newly created to avoid duplicates within this run
+                            existing_keys.add((result.student_id, outcome.id))
 
         ExamCBCSync.objects.create(
             tenant=tenant,
