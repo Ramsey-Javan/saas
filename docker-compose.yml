@@ -27,7 +27,7 @@ services:
     # Removed the broken loop; service_healthy handles the wait
     command: >
       sh -c "python manage.py migrate && 
-             python manage.py runserver 0.0.0.0:8000"
+             gunicorn core.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120"
     volumes:
       - ./backend:/app
     ports:

@@ -19,3 +19,4 @@ pytest-mock==3.14.0
 pytest-cov==5.0.0
 factory-boy==3.3.0
 faker==24.3.0
+gunicorn
