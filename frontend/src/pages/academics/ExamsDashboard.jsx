@@ -17,6 +17,26 @@ const EXAM_TYPES = [
 
 const defaults = { be_min: 0, be_max: 29, ae_min: 30, ae_max: 49, me_min: 50, me_max: 74, ee_min: 75, ee_max: 100 }
 
+// ── BUG FIX: reusable error-message extraction, matching the pattern
+// already used in PaymentModal.jsx. DRF's default exception handling
+// returns { detail: "..." } for PermissionDenied/404s, but the axios
+// interceptor's generic fallback only checks `.message` -- so every real
+// backend error was silently replaced with a useless "Something went
+// wrong." This checks the actual shapes DRF returns and falls back to a
+// clear, specific default only as a last resort.
+function extractSyncError(err) {
+  const data = err?.response?.data
+  if (!data) return 'Could not sync grades to CBC. Check your connection and try again.'
+  if (data.detail) return data.detail
+  if (data.error) return data.error
+  if (typeof data === 'string') return data
+  const firstKey = Object.keys(data)[0]
+  if (!firstKey) return 'Could not sync grades to CBC. Check your connection and try again.'
+  const value = data[firstKey]
+  return Array.isArray(value) ? value[0] : value
+}
+// ── END BUG FIX ──
+
 function ExamConfigModal({ onClose }) {
   const [form, setForm] = useState(defaults)
   const [saving, setSaving] = useState(false)
@@ -82,6 +102,7 @@ function CreateExamModal({ classrooms, onClose, onDone }) {
   const [saving, setSaving] = useState(false)
   const [availableSubjects, setAvailableSubjects] = useState([])
   const [subjectsLoading, setSubjectsLoading] = useState(false)
+  const [error, setError] = useState('')
   const [form, setForm] = useState({
     name: '',
     exam_type: 'endterm',
@@ -127,6 +148,7 @@ function CreateExamModal({ classrooms, onClose, onDone }) {
   const submit = async (event) => {
     event.preventDefault()
     setSaving(true)
+    setError('')
     try {
       const { subjects: selectedSubjects, ...payload } = form
       const { data } = await academicsApi.createExamSetup(payload)
@@ -135,6 +157,8 @@ function CreateExamModal({ classrooms, onClose, onDone }) {
       }
       onDone()
       onClose()
+    } catch (err) {
+      setError(extractSyncError(err))
     } finally {
       setSaving(false)
     }
@@ -143,6 +167,7 @@ function CreateExamModal({ classrooms, onClose, onDone }) {
   return (
     <Modal title="Create Exam" onClose={onClose} footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" form="create-exam-form" loading={saving}>Create Exam</Button></>}>
       <form id="create-exam-form" onSubmit={submit} className="space-y-4">
+        {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="Exam Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
           <Select label="Exam Type" value={form.exam_type} onChange={e => setForm(f => ({ ...f, exam_type: e.target.value }))}>
@@ -197,6 +222,13 @@ export default function ExamsDashboard() {
   const [configOpen, setConfigOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  // ── BUG FIX: track which exam is currently syncing (by id) so we can
+  // show a real in-progress state on that specific card, and disable its
+  // button so a second click can't fire a duplicate sync while one is
+  // already running.
+  const [syncingId, setSyncingId] = useState(null)
+  // ── END BUG FIX ──
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -223,11 +255,28 @@ export default function ExamsDashboard() {
     return { active, results, pending, synced }
   }, [exams])
 
+  // ── BUG FIX: syncExam previously had no try/catch at all -- any
+  // failure (permission denied, exam not found, server error) became an
+  // uncaught promise rejection, and the only feedback the person ever
+  // saw was the interceptor's generic "Something went wrong." (since
+  // DRF returns `detail`, not `message`, which is all the interceptor
+  // checks). Now shows a real in-progress state and surfaces the actual
+  // reason on failure.
   const syncExam = async (id) => {
-    const { data } = await academicsApi.syncToCBC(id)
-    setMessage(data.message)
-    fetchData()
+    setError('')
+    setMessage('')
+    setSyncingId(id)
+    try {
+      const { data } = await academicsApi.syncToCBC(id)
+      setMessage(data.message)
+      await fetchData()
+    } catch (err) {
+      setError(extractSyncError(err))
+    } finally {
+      setSyncingId(null)
+    }
   }
+  // ── END BUG FIX ──
 
   if (loading) return <div className="flex justify-center py-20"><Spinner className="h-7 w-7" /></div>
 
@@ -243,6 +292,7 @@ export default function ExamsDashboard() {
         }
       />
       {message && <div className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-700">{message}</div>}
+      {error && <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
       <Card className="p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
         <Select label="Term" value={filters.term} onChange={e => setFilters(f => ({ ...f, term: e.target.value }))}>
           <option value="">All terms</option>
@@ -271,6 +321,7 @@ export default function ExamsDashboard() {
           {exams.map(exam => {
             const total = (exam.total_students || 0) * (exam.subjects_count || 0)
             const progress = total ? Math.round(((exam.results_count || 0) / total) * 100) : 0
+            const isSyncing = syncingId === exam.id
             return (
               <Card key={exam.id} className="p-5">
                 <div className="flex items-start justify-between gap-3">
@@ -289,10 +340,27 @@ export default function ExamsDashboard() {
                 </div>
                 <p className="mt-1 text-xs text-gray-500">{progress}% marks entry completion</p>
                 {exam.last_sync_at && <p className="mt-2 text-xs text-green-700">Last synced {new Date(exam.last_sync_at).toLocaleString()}</p>}
+                {/* ── BUG FIX: indeterminate sync-in-progress indicator.
+                    sync_to_cbc runs as one atomic transaction with no
+                    progress-reporting from the backend, so this can't be
+                    a real percentage -- but an animated bar + status text
+                    makes it unmistakable that something is happening,
+                    instead of the button just going quiet. */}
+                {isSyncing && (
+                  <div className="mt-3">
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+                      <div className="h-full w-1/3 animate-[syncbar_1.2s_ease-in-out_infinite] rounded-full bg-[var(--brand-primary)]" />
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">Syncing grades to CBC…</p>
+                  </div>
+                )}
+                {/* ── END BUG FIX ── */}
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Button size="sm" onClick={() => navigate(`/academics/exams/${exam.id}`)}>Enter Marks</Button>
-                  <Button size="sm" variant="secondary" disabled={!exam.results_count} onClick={() => syncExam(exam.id)}>Sync to CBC</Button>
-                  <Button size="sm" variant="secondary" onClick={() => navigate(`/academics/exams/${exam.id}/results`)}>View Results</Button>
+                  <Button size="sm" onClick={() => navigate(`/academics/exams/${exam.id}`)} disabled={isSyncing}>Enter Marks</Button>
+                  <Button size="sm" variant="secondary" disabled={!exam.results_count || isSyncing} loading={isSyncing} onClick={() => syncExam(exam.id)}>
+                    {isSyncing ? 'Syncing...' : 'Sync to CBC'}
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => navigate(`/academics/exams/${exam.id}/results`)} disabled={isSyncing}>View Results</Button>
                 </div>
               </Card>
             )
@@ -301,6 +369,15 @@ export default function ExamsDashboard() {
       )}
       {configOpen && <ExamConfigModal onClose={() => setConfigOpen(false)} />}
       {createOpen && <CreateExamModal classrooms={classrooms} onClose={() => setCreateOpen(false)} onDone={fetchData} />}
+      {/* Indeterminate progress bar keyframes -- slides a segment back and
+          forth to signal ongoing work without claiming a real percentage. */}
+      <style>{`
+        @keyframes syncbar {
+          0% { transform: translateX(-100%); }
+          50% { transform: translateX(150%); }
+          100% { transform: translateX(-100%); }
+        }
+      `}</style>
     </div>
   )
 }
