@@ -5,6 +5,18 @@ import { academicsApi } from '@/api/academics'
 import { Button, Card, Input, PageHeader, Select, Spinner } from '@/components/ui'
 import { LEVEL_COLORS, LevelBadge, Modal, downloadRowsAsCSV, termLabel } from './shared'
 
+function extractSyncError(err) {
+  const data = err?.response?.data
+  if (!data) return 'Operation failed. Check your connection and try again.'
+  if (data.detail) return data.detail
+  if (data.error) return data.error
+  if (typeof data === 'string') return data
+  const firstKey = Object.keys(data)[0]
+  if (!firstKey) return 'Operation failed. Check your connection and try again.'
+  const value = data[firstKey]
+  return Array.isArray(value) ? value[0] : value
+}
+
 const LEVELS = ['EE', 'ME', 'AE', 'BE']
 
 function SyncHistoryModal({ examId, onClose }) {
@@ -82,6 +94,7 @@ export default function ExamResultsPage() {
   const [overriddenOnly, setOverriddenOnly] = useState(false)
   const [sortSubject, setSortSubject] = useState('')
   const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
 
   const fetchSheet = useCallback(async () => {
     setLoading(true)
@@ -123,8 +136,15 @@ export default function ExamResultsPage() {
   const sync = async () => {
     const count = sheet?.students?.length || 0
     if (!window.confirm(`This will fill empty CBC grades for ${count} students. Manual CBC grades will not be overwritten.`)) return
-    const { data } = await academicsApi.syncToCBC(examId)
-    setMessage(data.message)
+    setMessage('')
+    setError('')
+    try {
+      const { data } = await academicsApi.syncToCBC(examId)
+      setMessage(data.message)
+      await fetchSheet()
+    } catch (err) {
+      setError(extractSyncError(err))
+    }
   }
 
   // Updated: include 'name' column after admission_number, consistent with template format
@@ -167,6 +187,7 @@ export default function ExamResultsPage() {
         }
       />
       {message && <div className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-700">{message}</div>}
+      {error && <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
       {hasSubjects ? (
         <>

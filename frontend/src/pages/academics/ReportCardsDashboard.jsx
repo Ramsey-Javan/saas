@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Download, FileText, Printer } from 'lucide-react'
+import { Download, FileText, ListChecks, Printer, Loader2 } from 'lucide-react'
 import { academicsApi } from '@/api/academics'
 import { studentsApi } from '@/api/students'
 import { useAuthStore } from '@/store/authStore'
@@ -86,6 +86,87 @@ function RemarksModal({ card, onClose, onDone }) {
   )
 }
 
+function DownloadChoiceModal({ onClose, onDownloadFull, onDownloadExam, title = 'Download Report Card' }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <h3 className="mb-1 text-lg font-semibold text-gray-900">{title}</h3>
+        <p className="mb-5 text-sm text-gray-500">Choose which version you want to download.</p>
+        <div className="space-y-3">
+          <button
+            onClick={onDownloadFull}
+            className="flex w-full items-center gap-3 rounded-lg border border-gray-200 p-4 text-left transition hover:border-[var(--brand-primary)] hover:bg-gray-50"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+              <FileText size={20} />
+            </div>
+            <div>
+              <p className="font-medium text-gray-900">Full PDF Summary</p>
+              <p className="text-xs text-gray-500">Includes CBC strands, sub-strands, outcomes, exams, attendance & conduct.</p>
+            </div>
+          </button>
+          <button
+            onClick={onDownloadExam}
+            className="flex w-full items-center gap-3 rounded-lg border border-gray-200 p-4 text-left transition hover:border-[var(--brand-primary)] hover:bg-gray-50"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-green-50 text-green-600">
+              <ListChecks size={20} />
+            </div>
+            <div>
+              <p className="font-medium text-gray-900">Shorter Exam PDF</p>
+              <p className="text-xs text-gray-500">Exams, attendance, conduct & remarks only. No strands/sub-strands.</p>
+            </div>
+          </button>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function BulkDownloadChoiceModal({ onClose, onDownloadFull, onDownloadExam, count, actionType }) {
+  const actionLabel = actionType === 'print' ? 'Print' : 'Download'
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <h3 className="mb-1 text-lg font-semibold text-gray-900">{actionLabel} Selected Report Cards</h3>
+        <p className="mb-5 text-sm text-gray-500">{count} report card(s) selected. Choose which version to {actionType === 'print' ? 'print' : 'download'}.</p>
+        <div className="space-y-3">
+          <button
+            onClick={onDownloadFull}
+            className="flex w-full items-center gap-3 rounded-lg border border-gray-200 p-4 text-left transition hover:border-[var(--brand-primary)] hover:bg-gray-50"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+              <FileText size={20} />
+            </div>
+            <div>
+              <p className="font-medium text-gray-900">Full PDF Summary</p>
+              <p className="text-xs text-gray-500">Includes CBC strands, sub-strands, outcomes, exams, attendance & conduct.</p>
+            </div>
+          </button>
+          <button
+            onClick={onDownloadExam}
+            className="flex w-full items-center gap-3 rounded-lg border border-gray-200 p-4 text-left transition hover:border-[var(--brand-primary)] hover:bg-gray-50"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-green-50 text-green-600">
+              <ListChecks size={20} />
+            </div>
+            <div>
+              <p className="font-medium text-gray-900">Shorter Exam PDF</p>
+              <p className="text-xs text-gray-500">Exams, attendance, conduct & remarks only. No strands/sub-strands.</p>
+            </div>
+          </button>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ReportCardsDashboard() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -94,6 +175,10 @@ export default function ReportCardsDashboard() {
   const [classrooms, setClassrooms] = useState([])
   const [selected, setSelected] = useState([])
   const [modal, setModal] = useState(null)
+  const [bulkAction, setBulkAction] = useState(null)
+  const [rowDownloadCard, setRowDownloadCard] = useState(null)
+  const [isDownloading, setIsDownloading] = useState(false)
+  const [downloadToast, setDownloadToast] = useState(null)
   const [filters, setFilters] = useState({ term: 'term1', academic_year: thisYear(), classroom: '', status: '', report_type: 'termly', student: searchParams.get('student') || '' })
   const [loading, setLoading] = useState(true)
 
@@ -135,7 +220,6 @@ export default function ReportCardsDashboard() {
     pending: cards.filter(c => !c.class_teacher_remarks || !c.principal_remarks).length,
   }), [cards])
 
-  // Select All logic
   const allSelected = cards.length > 0 && cards.every(card => selected.includes(card.id))
   const someSelected = cards.some(card => selected.includes(card.id)) && !allSelected
 
@@ -148,10 +232,16 @@ export default function ReportCardsDashboard() {
     }
   }
 
-  const openPdf = async (card) => {
-    const { data } = await academicsApi.getReportCardPdf(card.id)
-    openBlobInNewTab(data)
+  const openPdf = async (card, examOnly = false) => {
+    if (examOnly) {
+      const { data } = await academicsApi.getReportCardExamPdf(card.id)
+      openBlobInNewTab(data)
+    } else {
+      const { data } = await academicsApi.getReportCardPdf(card.id)
+      openBlobInNewTab(data)
+    }
   }
+
   const publish = async (card) => {
     await academicsApi.publishReportCard(card.id)
     fetchCards()
@@ -161,16 +251,182 @@ export default function ReportCardsDashboard() {
     setSelected([])
     fetchCards()
   }
-  const downloadSelected = async () => {
-    for (const id of selected) {
-      const { data } = await academicsApi.getReportCardPdf(id)
-      openBlobInNewTab(data)
+
+  const handleDownloadSelected = () => {
+    if (selected.length === 0) return
+    setBulkAction({ type: 'download' })
+  }
+  const handlePrintSelected = () => {
+    if (selected.length === 0) return
+    setBulkAction({ type: 'print' })
+  }
+
+  const executeBulkDownloadFull = async () => {
+    setBulkAction(null)
+    setIsDownloading(true)
+    setDownloadToast({ message: `Preparing ZIP with ${selected.length} full report cards...`, type: 'info' })
+    try {
+      const { data } = await academicsApi.bulkDownloadPdfs({ ids: selected, exam_only: false })
+      const blob = new Blob([data], { type: 'application/zip' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'report_cards.zip'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      setDownloadToast({ message: 'Download complete! Check your downloads folder.', type: 'success' })
+    } catch (err) {
+      setDownloadToast({ message: 'Download failed. Please try again.', type: 'error' })
+    } finally {
+      setIsDownloading(false)
+      setTimeout(() => setDownloadToast(null), 4000)
     }
   }
-  const printSelected = () => {
-    for (const id of selected) {
-      const card = cards.find(c => c.id === id)
-      if (card) openPdf(card)
+
+  const executeBulkDownloadExam = async () => {
+    setBulkAction(null)
+    setIsDownloading(true)
+    setDownloadToast({ message: `Preparing ZIP with ${selected.length} exam-only report cards...`, type: 'info' })
+    try {
+      const { data } = await academicsApi.bulkDownloadPdfs({ ids: selected, exam_only: true })
+      const blob = new Blob([data], { type: 'application/zip' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'report_cards_exam.zip'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      setDownloadToast({ message: 'Download complete! Check your downloads folder.', type: 'success' })
+    } catch (err) {
+      setDownloadToast({ message: 'Download failed. Please try again.', type: 'error' })
+    } finally {
+      setIsDownloading(false)
+      setTimeout(() => setDownloadToast(null), 4000)
+    }
+  }
+
+  const executeBulkPrintFull = async () => {
+    setBulkAction(null)
+    setIsDownloading(true)
+    setDownloadToast({ message: `Opening ${selected.length} full PDFs for printing...`, type: 'info' })
+    try {
+      for (let i = 0; i < selected.length; i++) {
+        const id = selected[i]
+        const card = cards.find(c => c.id === id)
+        if (card) {
+          const { data } = await academicsApi.getReportCardPdf(id)
+          const blob = new Blob([data], { type: 'application/pdf' })
+          const url = window.URL.createObjectURL(blob)
+          const printWindow = window.open(url, '_blank')
+          if (printWindow) {
+            setTimeout(() => {
+              try { printWindow.print() } catch (e) {}
+            }, 1000)
+          }
+          if (i < selected.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1200))
+          }
+        }
+      }
+      setDownloadToast({ message: 'All print windows opened.', type: 'success' })
+    } catch (err) {
+      setDownloadToast({ message: 'Print failed. Please try again.', type: 'error' })
+    } finally {
+      setIsDownloading(false)
+      setTimeout(() => setDownloadToast(null), 4000)
+    }
+  }
+
+  const executeBulkPrintExam = async () => {
+    setBulkAction(null)
+    setIsDownloading(true)
+    setDownloadToast({ message: `Opening ${selected.length} exam-only PDFs for printing...`, type: 'info' })
+    try {
+      for (let i = 0; i < selected.length; i++) {
+        const id = selected[i]
+        const card = cards.find(c => c.id === id)
+        if (card) {
+          const { data } = await academicsApi.getReportCardExamPdf(id)
+          const blob = new Blob([data], { type: 'application/pdf' })
+          const url = window.URL.createObjectURL(blob)
+          const printWindow = window.open(url, '_blank')
+          if (printWindow) {
+            setTimeout(() => {
+              try { printWindow.print() } catch (e) {}
+            }, 1000)
+          }
+          if (i < selected.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1200))
+          }
+        }
+      }
+      setDownloadToast({ message: 'All print windows opened.', type: 'success' })
+    } catch (err) {
+      setDownloadToast({ message: 'Print failed. Please try again.', type: 'error' })
+    } finally {
+      setIsDownloading(false)
+      setTimeout(() => setDownloadToast(null), 4000)
+    }
+  }
+
+  const onBulkFull = () => {
+    if (bulkAction?.type === 'download') {
+      executeBulkDownloadFull()
+    } else {
+      executeBulkPrintFull()
+    }
+  }
+
+  const onBulkExam = () => {
+    if (bulkAction?.type === 'download') {
+      executeBulkDownloadExam()
+    } else {
+      executeBulkPrintExam()
+    }
+  }
+
+  // Row-level download handlers
+  const handleRowPdfClick = (card) => {
+    setRowDownloadCard(card)
+  }
+
+  const downloadRowFull = async () => {
+    const card = rowDownloadCard
+    setRowDownloadCard(null)
+    if (!card) return
+    setIsDownloading(true)
+    setDownloadToast({ message: `Downloading full PDF for ${card.student_name}...`, type: 'info' })
+    try {
+      const { data } = await academicsApi.getReportCardPdf(card.id)
+      openBlobInNewTab(data)
+      setDownloadToast({ message: 'Download complete!', type: 'success' })
+    } catch (err) {
+      setDownloadToast({ message: 'Download failed. Please try again.', type: 'error' })
+    } finally {
+      setIsDownloading(false)
+      setTimeout(() => setDownloadToast(null), 3000)
+    }
+  }
+
+  const downloadRowExam = async () => {
+    const card = rowDownloadCard
+    setRowDownloadCard(null)
+    if (!card) return
+    setIsDownloading(true)
+    setDownloadToast({ message: `Downloading exam PDF for ${card.student_name}...`, type: 'info' })
+    try {
+      const { data } = await academicsApi.getReportCardExamPdf(card.id)
+      openBlobInNewTab(data)
+      setDownloadToast({ message: 'Download complete!', type: 'success' })
+    } catch (err) {
+      setDownloadToast({ message: 'Download failed. Please try again.', type: 'error' })
+    } finally {
+      setIsDownloading(false)
+      setTimeout(() => setDownloadToast(null), 3000)
     }
   }
 
@@ -202,8 +458,14 @@ export default function ReportCardsDashboard() {
       {selected.length > 0 && (
         <Card className="p-3 flex flex-wrap gap-2">
           {isAdmin && <Button size="sm" onClick={publishSelected}>Publish Selected</Button>}
-          <Button size="sm" variant="secondary" onClick={downloadSelected} className="gap-1"><Download size={14} /> Download PDFs</Button>
-          <Button size="sm" variant="secondary" onClick={printSelected} className="gap-1"><Printer size={14} /> Print Selected</Button>
+          <Button size="sm" variant="secondary" onClick={handleDownloadSelected} className="gap-1" disabled={isDownloading}>
+            {isDownloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            Download PDFs
+          </Button>
+          <Button size="sm" variant="secondary" onClick={handlePrintSelected} className="gap-1" disabled={isDownloading}>
+            {isDownloading ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
+            Print Selected
+          </Button>
           <span className="text-sm text-gray-500 self-center ml-auto">{selected.length} selected</span>
         </Card>
       )}
@@ -248,7 +510,7 @@ export default function ReportCardsDashboard() {
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex gap-2">
                         <Button size="sm" variant="secondary" onClick={() => setModal({ type: 'remarks', card })}>Edit Remarks</Button>
-                        <Button size="sm" variant="secondary" onClick={() => openPdf(card)}>PDF</Button>
+                        <Button size="sm" variant="secondary" onClick={() => handleRowPdfClick(card)}>PDF</Button>
                         <Button size="sm" variant="secondary" onClick={() => navigate(`/academics/report-cards/${card.id}`)}>View</Button>
                         {isAdmin && card.status !== 'published' && <Button size="sm" onClick={() => publish(card)}>Publish</Button>}
                       </div>
@@ -263,6 +525,37 @@ export default function ReportCardsDashboard() {
       {modal?.type === 'generate' && <GenerateModal classrooms={classrooms} onClose={() => setModal(null)} onDone={fetchCards} />}
       {modal?.type === 'annual' && <GenerateModal annual classrooms={classrooms} onClose={() => setModal(null)} onDone={fetchCards} />}
       {modal?.type === 'remarks' && <RemarksModal card={modal.card} onClose={() => setModal(null)} onDone={fetchCards} />}
+      {bulkAction && (
+        <BulkDownloadChoiceModal
+          onClose={() => setBulkAction(null)}
+          onDownloadFull={onBulkFull}
+          onDownloadExam={onBulkExam}
+          count={selected.length}
+          actionType={bulkAction.type}
+        />
+      )}
+      {rowDownloadCard && (
+        <DownloadChoiceModal
+          onClose={() => setRowDownloadCard(null)}
+          onDownloadFull={downloadRowFull}
+          onDownloadExam={downloadRowExam}
+          title={`Download ${rowDownloadCard.student_name}`}
+        />
+      )}
+      {downloadToast && (
+        <div className="fixed bottom-6 right-6 z-50">
+          <div className={`rounded-lg px-4 py-3 shadow-lg text-sm font-medium ${
+            downloadToast.type === 'success' ? 'bg-green-600 text-white' :
+            downloadToast.type === 'error' ? 'bg-red-600 text-white' :
+            'bg-gray-900 text-white'
+          }`}>
+            <div className="flex items-center gap-2">
+              {downloadToast.type === 'info' && <Loader2 size={16} className="animate-spin" />}
+              {downloadToast.message}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

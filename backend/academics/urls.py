@@ -1,24 +1,26 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .views import (
-    AttendanceSessionViewSet,
-    CBCGradeViewSet,
+from .views.curriculum import (
     ClassSubjectAssignmentViewSet,
-    ClassTimetableViewSet,
-    CoCurricularActivityViewSet,
-    ExamConfigViewSet,
-    ExamResultViewSet,
-    ExamSetupViewSet,
     LearningOutcomeViewSet,
+    StrandViewSet,
+    SubjectViewSet,
+    SubStrandViewSet,
+)
+from .views.exams import ExamResultViewSet, ExamSetupViewSet
+from .views.grades import CBCGradeViewSet, ExamConfigViewSet
+from .views.national_exams import (
     NationalExamCandidateViewSet,
     NationalExamResultViewSet,
     NationalExamSessionViewSet,
+)
+from .views.school_life import (
+    AttendanceSessionViewSet,
+    ClassTimetableViewSet,
+    CoCurricularActivityViewSet,
     ReportCardViewSet,
-    StrandViewSet,
     StudentCoCurricularViewSet,
-    SubjectViewSet,
-    SubStrandViewSet,
 )
 
 router = DefaultRouter()

@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from celery.schedules import crontab
 from corsheaders.defaults import default_headers
+from datetime import timedelta
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -14,11 +16,6 @@ DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
 _allowed = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,0.0.0.0,::1') 
 ALLOWED_HOSTS = [host.strip() for host in _allowed.split(',') if host.strip()]
-
-# DebugLine (What django actualy sees remove in production )
-#if DEBUG:
-#   print(f"ALLOWED_HOSTS loaded : {ALLOWED_HOSTS}")
-#   print(f"DEBUG mode: {DEBUG}")
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -38,6 +35,7 @@ INSTALLED_APPS = [
     'communication.apps.CommunicationConfig',
     'activity',
     'dashboard.apps.DashboardConfig',
+    'analytics.apps.AnalyticsConfig',
     ]
 
 MIDDLEWARE = [
@@ -49,6 +47,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'core.exception_handlers.JSONErrorMiddleware',
 ]
 
 ROOT_URLCONF = 'core.urls'
@@ -115,14 +114,23 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'login': '10/minute',
         'sms_send': '20/minute',
-        'mpesa_stk': '15/minute',
+        'mpesa_stk': '30/minute',
         'invite_accept': '10/hour',
     },
 }
 
+# JWT Token Lifetime
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': False,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
+
 CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173').split(',')
 CORS_ALLOW_HEADERS = list(default_headers) + ['cache-control',]
-    
+
 CORS_ALLOW_CREDENTIALS = True
 
 CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
@@ -145,6 +153,23 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'tenants.tasks.check_trial_expiry_task',
         'schedule': crontab(hour=1, minute=0),
     },
+    'reconcile-pending-mpesa': {
+        'task': 'finance.tasks.reconcile_pending_mpesa_transactions',
+        'schedule': crontab(minute='*/2'),
+    },
+}
+
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': os.environ.get('CACHE_REDIS_URL', 'redis://redis:6379/1'),
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+        },
+        'KEY_PREFIX': 'saas',
+        'TIMEOUT': 300,
+    }
 }
 
 MPESA = {
@@ -155,6 +180,15 @@ MPESA = {
     'CALLBACK_URL': os.environ.get('MPESA_CALLBACK_URL', ''),
     'ENV': os.environ.get('MPESA_ENV', 'sandbox'),
 }
+
+# Known Safaricom IPs for logging and audit trail (not blocking)
+MPESA_ALLOWED_IPS = [
+    '196.201.214.200', '196.201.214.206',
+    '196.201.213.114', '196.201.214.207',
+    '196.201.212.69',
+]
+
+MPESA_TIMEOUT_SECONDS = int(os.environ.get('MPESA_TIMEOUT_SECONDS', '90'))
 
 AFRICA_TALKING = {
     'API_KEY': os.environ.get('AT_API_KEY', ''),
@@ -176,6 +210,8 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@yourapp.co.ke')
 
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
+
 TENANT_APPS = [
     'accounts',
     'students',
@@ -183,14 +219,5 @@ TENANT_APPS = [
     'academics',
     'communication',
     'dashboard',
+    'analytics',
 ]
-
-# JWT Token Lifetime
-from datetime import timedelta
-SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
-    'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': False,
-    'AUTH_HEADER_TYPES': ('Bearer',),
-}

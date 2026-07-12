@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Download } from 'lucide-react'
+import { ArrowLeft, Download, FileText, ListChecks, Loader2 } from 'lucide-react'
 import { academicsApi } from '@/api/academics'
 import { studentsApi } from '@/api/students'
 import { useAuthStore } from '@/store/authStore'
@@ -9,6 +9,46 @@ import { LevelBadge, StatusBadge, listFromResponse, openBlobInNewTab, termLabel 
 
 function InfoRow({ label, value }) {
   return <div className="flex justify-between border-b border-gray-50 py-2 text-sm"><span className="text-gray-500">{label}</span><span className="font-medium text-gray-900">{value || '—'}</span></div>
+}
+
+function DownloadChoiceModal({ onClose, onDownloadFull, onDownloadExam, title = 'Download Report Card' }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <h3 className="mb-1 text-lg font-semibold text-gray-900">{title}</h3>
+        <p className="mb-5 text-sm text-gray-500">Choose which version you want to download.</p>
+        <div className="space-y-3">
+          <button
+            onClick={onDownloadFull}
+            className="flex w-full items-center gap-3 rounded-lg border border-gray-200 p-4 text-left transition hover:border-[var(--brand-primary)] hover:bg-gray-50"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+              <FileText size={20} />
+            </div>
+            <div>
+              <p className="font-medium text-gray-900">Full PDF Summary</p>
+              <p className="text-xs text-gray-500">Includes CBC strands, sub-strands, outcomes, exams, attendance & conduct.</p>
+            </div>
+          </button>
+          <button
+            onClick={onDownloadExam}
+            className="flex w-full items-center gap-3 rounded-lg border border-gray-200 p-4 text-left transition hover:border-[var(--brand-primary)] hover:bg-gray-50"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-green-50 text-green-600">
+              <ListChecks size={20} />
+            </div>
+            <div>
+              <p className="font-medium text-gray-900">Shorter Exam PDF</p>
+              <p className="text-xs text-gray-500">Exams, attendance, conduct & remarks only. No strands/sub-strands.</p>
+            </div>
+          </button>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export default function ReportCardDetailPage() {
@@ -21,6 +61,9 @@ export default function ReportCardDetailPage() {
   const [activities, setActivities] = useState([])
   const [examResults, setExamResults] = useState([])
   const [loading, setLoading] = useState(true)
+  const [showDownloadModal, setShowDownloadModal] = useState(false)
+  const [isDownloading, setIsDownloading] = useState(false)
+  const [downloadToast, setDownloadToast] = useState(null)
 
   const fetchCard = useCallback(async () => {
     setLoading(true)
@@ -48,10 +91,38 @@ export default function ReportCardDetailPage() {
 
   useEffect(() => { fetchCard() }, [fetchCard])
 
-  const pdf = async () => {
-    const { data } = await academicsApi.getReportCardPdf(id)
-    openBlobInNewTab(data)
+  const downloadFullPdf = async () => {
+    setShowDownloadModal(false)
+    setIsDownloading(true)
+    setDownloadToast({ message: 'Downloading full PDF...', type: 'info' })
+    try {
+      const { data } = await academicsApi.getReportCardPdf(id)
+      openBlobInNewTab(data)
+      setDownloadToast({ message: 'Download complete!', type: 'success' })
+    } catch (err) {
+      setDownloadToast({ message: 'Download failed. Please try again.', type: 'error' })
+    } finally {
+      setIsDownloading(false)
+      setTimeout(() => setDownloadToast(null), 3000)
+    }
   }
+
+  const downloadExamPdf = async () => {
+    setShowDownloadModal(false)
+    setIsDownloading(true)
+    setDownloadToast({ message: 'Downloading exam-only PDF...', type: 'info' })
+    try {
+      const { data } = await academicsApi.getReportCardExamPdf(id)
+      openBlobInNewTab(data)
+      setDownloadToast({ message: 'Download complete!', type: 'success' })
+    } catch (err) {
+      setDownloadToast({ message: 'Download failed. Please try again.', type: 'error' })
+    } finally {
+      setIsDownloading(false)
+      setTimeout(() => setDownloadToast(null), 3000)
+    }
+  }
+
   const publish = async () => {
     await academicsApi.publishReportCard(id)
     fetchCard()
@@ -82,7 +153,15 @@ export default function ReportCardDetailPage() {
       <PageHeader
         title={`${card.student_name} - ${card.classroom_name} - ${termLabel(card.term)}`}
         description={<StatusBadge status={card.status} />}
-        action={<div className="flex gap-2"><Button variant="secondary" onClick={pdf} className="gap-2"><Download size={16} /> Download PDF</Button>{isAdmin && card.status !== 'published' && <Button onClick={publish}>Publish</Button>}</div>}
+        action={
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={() => setShowDownloadModal(true)} className="gap-2" disabled={isDownloading}>
+              {isDownloading ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+              Download PDF
+            </Button>
+            {isAdmin && card.status !== 'published' && <Button onClick={publish}>Publish</Button>}
+          </div>
+        }
       />
       <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr_320px] gap-5">
         <Card className="p-5">
@@ -181,6 +260,30 @@ export default function ReportCardDetailPage() {
           <Card className="p-5"><h2 className="mb-3 font-semibold text-gray-900">Dates</h2><InfoRow label="Closing" value={card.closing_date} /><InfoRow label="Next Opening" value={card.next_term_opening_date} /></Card>
         </div>
       </div>
+
+      {showDownloadModal && (
+        <DownloadChoiceModal
+          onClose={() => setShowDownloadModal(false)}
+          onDownloadFull={downloadFullPdf}
+          onDownloadExam={downloadExamPdf}
+          title={`Download ${card.student_name}`}
+        />
+      )}
+
+      {downloadToast && (
+        <div className="fixed bottom-6 right-6 z-50">
+          <div className={`rounded-lg px-4 py-3 shadow-lg text-sm font-medium ${
+            downloadToast.type === 'success' ? 'bg-green-600 text-white' :
+            downloadToast.type === 'error' ? 'bg-red-600 text-white' :
+            'bg-gray-900 text-white'
+          }`}>
+            <div className="flex items-center gap-2">
+              {downloadToast.type === 'info' && <Loader2 size={16} className="animate-spin" />}
+              {downloadToast.message}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -99,3 +99,8 @@ export function useToast() {
   }
   return ctx
 }
+
+// Default export for ui/index.js re-export compatibility
+export default function Toast() {
+  return null
+}

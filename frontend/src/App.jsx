@@ -1,8 +1,9 @@
+import React from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'  
 import { ProtectedRoute, GuestRoute, ROLE_DASHBOARDS, RootRedirect } from '@/components/auth/ProtectedRoute'
 import { useAuthStore } from '@/store/authStore'  
 import { AdminDashboard, TeacherDashboard, ParentDashboard } from '@/pages/dashboard'
-import { StudentsPage, StudentDetailPage, AdmitStudentPage, BulkImportPage, StudentIdCardPage, ClassroomsPage,MyHomeClassPage } from '@/pages/students'
+import { StudentsPage, StudentDetailPage, AdmitStudentPage, BulkImportPage, StudentIdCardPage, ClassroomsPage, MyHomeClassPage } from '@/pages/students'
 import BursarDashboard from '@/pages/finance/BursarDashboard'
 import InvoicesListPage from '@/pages/finance/InvoicesListPage'
 import FeeStructuresPage from '@/pages/finance/FeeStructuresPage'
@@ -47,6 +48,14 @@ import { PublicSignupPage } from '@/pages/public'
 import AcceptInvitePage from '@/pages/auth/AcceptInvitePage'
 import AppShell from '@/components/layout/AppShell'
 import LoginPage from '@/pages/auth/LoginPage'  
+
+import { 
+  AnalyticsDashboard, 
+  ClassPerformancePage, 
+  StudentProfilePage, 
+  SubjectAnalysisPage 
+} from '@/pages/analytics'
+
 import './App.css'
 
 function ProtectedShell({ allowedRoles, children }) {
@@ -68,6 +77,8 @@ export default function App() {
         <Route path="/accept-invite" element={<GuestRoute><AcceptInvitePage /></GuestRoute>} />
         <Route path="/dashboard" element={<ProtectedShell allowedRoles={['admin']}><AdminDashboard /></ProtectedShell>} />
         <Route path="/teacher" element={<ProtectedShell allowedRoles={['teacher']}><TeacherDashboard /></ProtectedShell>} />
+        
+        {/* FINANCE ROUTES */}
         <Route path="/finance" element={<ProtectedShell allowedRoles={['admin','bursar']}><BursarDashboard /></ProtectedShell>} />
         <Route path="/finance/payments" element={<ProtectedShell allowedRoles={['admin','bursar']}><PaymentsPage /></ProtectedShell>} />
         <Route path="/finance/receipts" element={<ProtectedShell allowedRoles={['admin','bursar']}><ReceiptsPage /></ProtectedShell>} />
@@ -80,6 +91,8 @@ export default function App() {
         <Route path="/finance/waivers-dashboard" element={<ProtectedShell allowedRoles={['admin','bursar']}><WaiversDashboardPage /></ProtectedShell>} />
         <Route path="/finance/waiver-policies" element={<ProtectedShell allowedRoles={['admin','bursar']}><WaiverPoliciesPage /></ProtectedShell>} />
         <Route path="/finance/students/:studentId/statement" element={<ProtectedShell allowedRoles={['admin','bursar','parent']}><StudentStatementPage /></ProtectedShell>} />
+        
+        {/* ACADEMICS ROUTES */}
         <Route path="/academics" element={<ProtectedShell allowedRoles={['admin','teacher']}><AcademicsDashboard /></ProtectedShell>} />
         <Route path="/academics/curriculum" element={<ProtectedShell allowedRoles={['admin']}><CurriculumPage /></ProtectedShell>} />
         <Route path="/academics/assignments" element={<ProtectedShell allowedRoles={['admin']}><AssignmentsPage /></ProtectedShell>} />
@@ -97,7 +110,11 @@ export default function App() {
         <Route path="/academics/exams/:examId/results" element={<ProtectedShell allowedRoles={['admin','teacher']}><ExamResultsPage /></ProtectedShell>} />
         <Route path="/academics/national-exams" element={<ProtectedShell allowedRoles={['admin']}><NationalExamsDashboard /></ProtectedShell>} />
         <Route path="/academics/national-exams/:sessionId" element={<ProtectedShell allowedRoles={['admin']}><NationalExamDetailPage /></ProtectedShell>} />
+        
+        {/* PARENT ROUTE */}
         <Route path="/parent" element={<ProtectedShell allowedRoles={['parent']}><ParentDashboard /></ProtectedShell>} />
+        
+        {/* STUDENTS ROUTES */}
         <Route path="/students" element={<ProtectedShell allowedRoles={['admin','teacher','bursar']}><StudentsPage /></ProtectedShell>} />
         <Route path="/students/new" element={<ProtectedShell allowedRoles={['admin']}><AdmitStudentPage /></ProtectedShell>} />
         <Route path="/students/import" element={<ProtectedShell allowedRoles={['admin']}><BulkImportPage /></ProtectedShell>} />
@@ -105,21 +122,35 @@ export default function App() {
         <Route path="/students/:id/id-card" element={<ProtectedShell allowedRoles={['admin']}><StudentIdCardPage /></ProtectedShell>} />
         <Route path="/students/:id" element={<ProtectedShell allowedRoles={['admin','teacher','parent','bursar']}><StudentDetailPage /></ProtectedShell>} />
         <Route path="/students/:id/edit" element={<ProtectedShell allowedRoles={['admin']}><AdmitStudentPage /></ProtectedShell>} />
+        
+        {/* NEW: ANALYTICS ROUTES */}
+        <Route path="/analytics" element={<ProtectedShell allowedRoles={['admin', 'teacher']}><AnalyticsDashboard /></ProtectedShell>} />
+        <Route path="/analytics/class/:classroomId" element={<ProtectedShell allowedRoles={['admin', 'teacher']}><ClassPerformancePage /></ProtectedShell>} />
+        <Route path="/analytics/student/:studentId" element={<ProtectedShell allowedRoles={['admin', 'teacher', 'parent']}><StudentProfilePage /></ProtectedShell>} />
+        <Route path="/analytics/subject/:subjectId" element={<ProtectedShell allowedRoles={['admin', 'teacher']}><SubjectAnalysisPage /></ProtectedShell>} />
+
+        {/* COMMUNICATION ROUTES */}
         <Route path="/communication" element={<ProtectedShell allowedRoles={['admin','teacher']}><CommunicationDashboard /></ProtectedShell>} />
         <Route path="/communication/compose" element={<ProtectedShell allowedRoles={['admin','teacher']}><ComposeMessagePage /></ProtectedShell>} />
         <Route path="/communication/templates" element={<ProtectedShell allowedRoles={['admin']}><TemplatesPage /></ProtectedShell>} />
         <Route path="/communication/scheduled" element={<ProtectedShell allowedRoles={['admin','teacher']}><ScheduledMessagesPage /></ProtectedShell>} />
         <Route path="/communication/logs" element={<ProtectedShell allowedRoles={['admin','teacher']}><MessageLogsPage /></ProtectedShell>} />
         <Route path="/communication/notifications" element={<ProtectedShell allowedRoles={['admin','teacher','bursar','parent']}><NotificationsPage /></ProtectedShell>} />
+        
+        {/* STAFF ROUTES */}
         <Route path="/staff" element={<ProtectedShell allowedRoles={['admin']}><StaffListPage /></ProtectedShell>} />
         <Route path="/staff/new" element={<ProtectedShell allowedRoles={['admin']}><AddStaffPage /></ProtectedShell>} />
         <Route path="/staff/:id" element={<ProtectedShell allowedRoles={['admin']}><StaffDetailPage /></ProtectedShell>} />
         <Route path="/staff/:id/edit" element={<ProtectedShell allowedRoles={['admin']}><EditStaffPage /></ProtectedShell>} />   
+        
+        {/* SCHOOL MANAGEMENT / SETTINGS ROUTES */}
         <Route path="/settings/school-profile" element={<ProtectedShell allowedRoles={['admin']}><SchoolProfileSettingsPage /></ProtectedShell>} />
         <Route path="/platform" element={<ProtectedShell allowedRoles={['superadmin']}><SuperadminDashboard /></ProtectedShell>} />
         <Route path="/platform/schools" element={<ProtectedShell allowedRoles={['superadmin']}><SuperadminDashboard /></ProtectedShell>} />
         <Route path="/platform/schools/:id" element={<ProtectedShell allowedRoles={['superadmin']}><PlatformSchoolDetailPage /></ProtectedShell>} />
         <Route path="/settings/change-password" element={<ChangePasswordSettingsPage />} />
+        
+        {/* PUBLIC/AUTH GUEST ROUTES */}
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
