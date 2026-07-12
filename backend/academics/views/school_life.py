@@ -1,4 +1,7 @@
 """Attendance, timetable, co-curricular and report card viewsets."""
+import io
+import zipfile
+
 from django.db import transaction
 from django.http import HttpResponse
 from django.utils import timezone
@@ -59,13 +62,6 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         if _is_teacher(self.request.user):
-            # Teachers see sessions for classes they teach a subject in,
-            # AND classes where they are the homeroom (class_teacher) —
-            # a pure homeroom teacher with no subject assignment of their
-            # own should still see their own class's attendance sessions.
-            # Marking rights are enforced separately per session_type
-            # (see _check_attendance_permission below); this filter only
-            # controls visibility.
             from students.models import Classroom
 
             homeroom_ids = set(
@@ -90,16 +86,6 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     REGISTER_SESSION_TYPES = {'daily', 'morning', 'afternoon'}
 
     def _check_attendance_permission(self, classroom, session_type, subject=None):
-        """
-        Enforce who may create/update/mark an attendance session:
-        - Register sessions (daily/morning/afternoon): only the homeroom
-          (class_teacher) for this classroom may act. This is the main
-          class register, not tied to any one subject.
-        - Lesson sessions: a subject teacher with a ClassSubjectAssignment
-          for this classroom (and, if provided, this subject) may act,
-          in addition to the homeroom teacher.
-        Admins bypass this entirely (not called for them — see callers).
-        """
         if not _is_teacher(self.request.user):
             return
 
@@ -113,7 +99,6 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 )
             return
 
-        # session_type == 'lesson' (or any other non-register type)
         if is_homeroom:
             return
         if classroom.id not in set(_teacher_classroom_ids(user)):
@@ -199,8 +184,8 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                     updated += 1
 
         return Response({'created': created, 'updated': updated, 'errors': errors, 'session_id': session.id})
-    @action(detail=True, methods=['patch'], permission_classes=[IsAdminUser], url_path='lock')
 
+    @action(detail=True, methods=['patch'], permission_classes=[IsAdminUser], url_path='lock')
     def lock(self, request, pk=None):
         session = self.get_object()
         session.is_locked = True
@@ -549,19 +534,18 @@ class ReportCardViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         report_card.save(update_fields=['status', 'published_at'])
         return Response(ReportCardSerializer(report_card, context={'request': request}).data)
 
-    @action(detail=True, methods=['get'], permission_classes=[CanViewReportCard], url_path='pdf')
-    def pdf(self, request, pk=None):
-        report_card = self.get_object()
+    def _pdf_common_data(self, report_card, request):
+        """Gather common data used by both full and exam-only PDFs."""
         tenant = request.user.tenant
+        student = report_card.student
+        classroom = report_card.classroom
 
         if _is_parent(request.user):
             if not user_owns_student(request.user, report_card.student):
-                return Response({'error': 'Access denied.'}, status=status.HTTP_403_FORBIDDEN)
+                return None, Response({'error': 'Access denied.'}, status=status.HTTP_403_FORBIDDEN)
             if report_card.status != 'published':
-                return Response({'error': 'Report card not yet published.'}, status=status.HTTP_403_FORBIDDEN)
+                return None, Response({'error': 'Report card not yet published.'}, status=status.HTTP_403_FORBIDDEN)
 
-        student = report_card.student
-        classroom = report_card.classroom
         grades = CBCGrade.objects.filter(
             tenant=tenant,
             student=student,
@@ -580,14 +564,48 @@ class ReportCardViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             academic_year=report_card.academic_year,
         ).select_related('activity')
 
-        response = HttpResponse(content_type='application/pdf')
-        filename = f'report_card_{student.admission_number}_{report_card.term}_{report_card.academic_year}.pdf'
-        response['Content-Disposition'] = f'inline; filename="{filename}"'
+        exam_results = ExamResult.objects.filter(
+            tenant=tenant,
+            student=student,
+            exam_subject__exam__academic_year=report_card.academic_year,
+        ).select_related(
+            'exam_subject__exam', 'exam_subject__subject'
+        ).order_by(
+            'exam_subject__exam__start_date',
+            'exam_subject__subject__order',
+            'exam_subject__subject__name',
+        )
+        if report_card.term:
+            exam_results = exam_results.filter(exam_subject__exam__term=report_card.term)
 
+        return {
+            'tenant': tenant,
+            'student': student,
+            'classroom': classroom,
+            'report_card': report_card,
+            'grades': grades,
+            'co_curricular': co_curricular,
+            'exam_results': exam_results,
+        }, None
+
+    def _build_pdf_response(self, report_card, data, include_grades=True):
+        """Build the actual PDF and return an HttpResponse."""
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.utils import ImageReader, simpleSplit
         from reportlab.pdfgen import canvas
+
+        tenant = data['tenant']
+        student = data['student']
+        classroom = data['classroom']
+        report_card = data['report_card']
+        grades = data['grades']
+        co_curricular = data['co_curricular']
+        exam_results = data['exam_results']
+
+        response = HttpResponse(content_type='application/pdf')
+        filename = f'{student.admission_number}.pdf'
+        response['Content-Disposition'] = f'inline; filename="{filename}"'
 
         pdf = canvas.Canvas(response, pagesize=A4)
         page_width, page_height = A4
@@ -626,118 +644,107 @@ class ReportCardViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 return ['']
             return simpleSplit(str(text), font_name, font_size, width) or ['']
 
-        def draw_learning_header(y_pos, continued=False):
-            title = 'LEARNING AREA PERFORMANCE'
-            if continued:
-                title += ' (cont.)'
-            pdf.setFont('Helvetica-Bold', 10)
-            pdf.drawString(margin_x, y_pos, title)
-            y_pos -= 14
+        # ── CBC GRADES SECTION (only for full PDF) ──
+        if include_grades:
+            def draw_learning_header(y_pos, continued=False):
+                title = 'LEARNING AREA PERFORMANCE'
+                if continued:
+                    title += ' (cont.)'
+                pdf.setFont('Helvetica-Bold', 10)
+                pdf.drawString(margin_x, y_pos, title)
+                y_pos -= 14
 
-            pdf.setFont('Helvetica-Bold', 8)
-            pdf.drawString(col_subject, y_pos, 'Subject')
-            pdf.drawString(col_strand, y_pos, 'Strand')
-            pdf.drawString(col_substrand, y_pos, 'Sub-Strand')
-            pdf.drawString(col_outcome, y_pos, 'Outcome')
-            pdf.drawString(col_level, y_pos, 'Level')
-            y_pos -= 10
-            pdf.line(margin_x, y_pos, page_width - margin_x, y_pos)
-            return y_pos - 12
+                pdf.setFont('Helvetica-Bold', 8)
+                pdf.drawString(col_subject, y_pos, 'Subject')
+                pdf.drawString(col_strand, y_pos, 'Strand')
+                pdf.drawString(col_substrand, y_pos, 'Sub-Strand')
+                pdf.drawString(col_outcome, y_pos, 'Outcome')
+                pdf.drawString(col_level, y_pos, 'Level')
+                y_pos -= 10
+                pdf.line(margin_x, y_pos, page_width - margin_x, y_pos)
+                return y_pos - 12
 
-        col_subject = margin_x
-        col_strand = col_subject + 80
-        col_substrand = col_strand + 90
-        col_outcome = col_substrand + 100
-        col_level = page_width - margin_x - 30
-        width_subject = col_strand - col_subject - 4
-        width_strand = col_substrand - col_strand - 4
-        width_substrand = col_outcome - col_substrand - 4
-        width_outcome = col_level - col_outcome - 8
+            col_subject = margin_x
+            col_strand = col_subject + 80
+            col_substrand = col_strand + 90
+            col_outcome = col_substrand + 100
+            col_level = page_width - margin_x - 30
+            width_subject = col_strand - col_subject - 4
+            width_strand = col_substrand - col_strand - 4
+            width_substrand = col_outcome - col_substrand - 4
+            width_outcome = col_level - col_outcome - 8
 
-        y = draw_learning_header(y, continued=False)
+            y = draw_learning_header(y, continued=False)
 
-        row_font = 'Helvetica'
-        row_size = 7
-        row_line_height = 9
-        pdf.setFont(row_font, row_size)
-
-        current_subject = None
-        current_strand = None
-        current_substrand = None
-        level_colors = {
-            'EE': colors.HexColor('#16a34a'),
-            'ME': colors.HexColor('#2563eb'),
-            'AE': colors.HexColor('#ea580c'),
-            'BE': colors.HexColor('#dc2626'),
-        }
-
-        for grade in grades:
-            outcome = grade.learning_outcome
-            sub_strand = outcome.sub_strand
-            strand = sub_strand.strand
-            subject = strand.subject
-
-            subject_label = subject.name if subject.name != current_subject else ''
-            strand_label = strand.name if strand.name != current_strand else ''
-            sub_strand_label = sub_strand.name if sub_strand.name != current_substrand else ''
-
-            subject_lines = wrap_text(subject_label, width_subject, row_font, row_size)
-            strand_lines = wrap_text(strand_label, width_strand, row_font, row_size)
-            substrand_lines = wrap_text(sub_strand_label, width_substrand, row_font, row_size)
-            outcome_lines = wrap_text(outcome.description, width_outcome, row_font, row_size)
-
-            row_lines = max(len(subject_lines), len(strand_lines), len(substrand_lines), len(outcome_lines), 1)
-            row_height = row_lines * row_line_height
-
-            if y - row_height < 80:
-                pdf.showPage()
-                y = page_height - 40
-                current_subject = None
-                current_strand = None
-                current_substrand = None
-                y = draw_learning_header(y, continued=True)
-                pdf.setFont(row_font, row_size)
-
-            for i in range(row_lines):
-                line_y = y - i * row_line_height
-                if i < len(subject_lines):
-                    pdf.drawString(col_subject, line_y, subject_lines[i])
-                if i < len(strand_lines):
-                    pdf.drawString(col_strand, line_y, strand_lines[i])
-                if i < len(substrand_lines):
-                    pdf.drawString(col_substrand, line_y, substrand_lines[i])
-                if i < len(outcome_lines):
-                    pdf.drawString(col_outcome, line_y, outcome_lines[i])
-
-            pdf.setFillColor(level_colors.get(grade.level, colors.black))
-            pdf.setFont('Helvetica-Bold', 8)
-            pdf.drawString(col_level, y, grade.level)
-            pdf.setFillColor(colors.black)
+            row_font = 'Helvetica'
+            row_size = 7
+            row_line_height = 9
             pdf.setFont(row_font, row_size)
 
-            y -= row_height
-            current_subject = subject.name
-            current_strand = strand.name
-            current_substrand = sub_strand.name
+            current_subject = None
+            current_strand = None
+            current_substrand = None
+            level_colors = {
+                'EE': colors.HexColor('#16a34a'),
+                'ME': colors.HexColor('#2563eb'),
+                'AE': colors.HexColor('#ea580c'),
+                'BE': colors.HexColor('#dc2626'),
+            }
 
-        y -= 6
-        pdf.line(margin_x, y, page_width - margin_x, y)
-        y -= 14
+            for grade in grades:
+                outcome = grade.learning_outcome
+                sub_strand = outcome.sub_strand
+                strand = sub_strand.strand
+                subject = strand.subject
 
-        exam_results = ExamResult.objects.filter(
-            tenant=tenant,
-            student=student,
-            exam_subject__exam__academic_year=report_card.academic_year,
-        ).select_related(
-            'exam_subject__exam', 'exam_subject__subject'
-        ).order_by(
-            'exam_subject__exam__start_date',
-            'exam_subject__subject__order',
-            'exam_subject__subject__name',
-        )
-        if report_card.term:
-            exam_results = exam_results.filter(exam_subject__exam__term=report_card.term)
+                subject_label = subject.name if subject.name != current_subject else ''
+                strand_label = strand.name if strand.name != current_strand else ''
+                sub_strand_label = sub_strand.name if sub_strand.name != current_substrand else ''
 
+                subject_lines = wrap_text(subject_label, width_subject, row_font, row_size)
+                strand_lines = wrap_text(strand_label, width_strand, row_font, row_size)
+                substrand_lines = wrap_text(sub_strand_label, width_substrand, row_font, row_size)
+                outcome_lines = wrap_text(outcome.description, width_outcome, row_font, row_size)
+
+                row_lines = max(len(subject_lines), len(strand_lines), len(substrand_lines), len(outcome_lines), 1)
+                row_height = row_lines * row_line_height
+
+                if y - row_height < 80:
+                    pdf.showPage()
+                    y = page_height - 40
+                    current_subject = None
+                    current_strand = None
+                    current_substrand = None
+                    y = draw_learning_header(y, continued=True)
+                    pdf.setFont(row_font, row_size)
+
+                for i in range(row_lines):
+                    line_y = y - i * row_line_height
+                    if i < len(subject_lines):
+                        pdf.drawString(col_subject, line_y, subject_lines[i])
+                    if i < len(strand_lines):
+                        pdf.drawString(col_strand, line_y, strand_lines[i])
+                    if i < len(substrand_lines):
+                        pdf.drawString(col_substrand, line_y, substrand_lines[i])
+                    if i < len(outcome_lines):
+                        pdf.drawString(col_outcome, line_y, outcome_lines[i])
+
+                pdf.setFillColor(level_colors.get(grade.level, colors.black))
+                pdf.setFont('Helvetica-Bold', 8)
+                pdf.drawString(col_level, y, grade.level)
+                pdf.setFillColor(colors.black)
+                pdf.setFont(row_font, row_size)
+
+                y -= row_height
+                current_subject = subject.name
+                current_strand = strand.name
+                current_substrand = sub_strand.name
+
+            y -= 6
+            pdf.line(margin_x, y, page_width - margin_x, y)
+            y -= 14
+
+        # ── EXAM RESULTS SECTION ──
         if exam_results.exists():
             exam_groups = {}
             for result in exam_results:
@@ -820,6 +827,7 @@ class ReportCardViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             pdf.showPage()
             y = page_height - 40
 
+        # ── ATTENDANCE SECTION ──
         pdf.setFont('Helvetica-Bold', 10)
         pdf.drawString(margin_x, y, 'ATTENDANCE')
         y -= 14
@@ -836,6 +844,7 @@ class ReportCardViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         pdf.line(margin_x, y, page_width - margin_x, y)
         y -= 14
 
+        # ── CO-CURRICULAR SECTION ──
         if co_curricular.exists():
             pdf.setFont('Helvetica-Bold', 10)
             pdf.drawString(margin_x, y, 'CO-CURRICULAR ACTIVITIES')
@@ -889,6 +898,7 @@ class ReportCardViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             pdf.showPage()
             y = page_height - 40
 
+        # ── CONDUCT SECTION ──
         conduct_labels = {1: 'Poor', 2: 'Fair', 3: 'Good', 4: 'Excellent'}
         pdf.setFont('Helvetica-Bold', 10)
         pdf.drawString(margin_x, y, 'CONDUCT')
@@ -910,6 +920,7 @@ class ReportCardViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         pdf.line(margin_x, y, page_width - margin_x, y)
         y -= 14
 
+        # ── REMARKS SECTION ──
         pdf.setFont('Helvetica-Bold', 9)
         pdf.drawString(margin_x, y, 'Class Teacher Remarks:')
         pdf.setFont('Helvetica', 9)
@@ -937,6 +948,7 @@ class ReportCardViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         pdf.line(margin_x, y, page_width - margin_x, y)
         y -= 14
 
+        # ── DATES & SIGNATURES ──
         pdf.setFont('Helvetica', 9)
         if report_card.closing_date:
             pdf.drawString(margin_x, y, f'Closing Date: {report_card.closing_date}')
@@ -953,6 +965,70 @@ class ReportCardViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         pdf.drawCentredString(page_width / 2, y, f'Official Report Card - {tenant.name} - CBC Competency Based Assessment')
         pdf.showPage()
         pdf.save()
+        return response
+
+    @action(detail=True, methods=['get'], permission_classes=[CanViewReportCard], url_path='pdf')
+    def pdf(self, request, pk=None):
+        report_card = self.get_object()
+        data, error = self._pdf_common_data(report_card, request)
+        if error:
+            return error
+        return self._build_pdf_response(report_card, data, include_grades=True)
+
+    @action(detail=True, methods=['get'], permission_classes=[CanViewReportCard], url_path='exam-pdf')
+    def exam_pdf(self, request, pk=None):
+        report_card = self.get_object()
+        data, error = self._pdf_common_data(report_card, request)
+        if error:
+            return error
+        return self._build_pdf_response(report_card, data, include_grades=False)
+
+    @action(detail=False, methods=['post'], permission_classes=[CanViewReportCard], url_path='bulk-pdf')
+    def bulk_pdf(self, request):
+        """
+        POST /api/academics/report-cards/bulk-pdf/
+        Body: { ids: [1, 2, 3], exam_only: false }
+        Returns a ZIP file containing all selected PDFs.
+        """
+        ids = request.data.get('ids', [])
+        exam_only = request.data.get('exam_only', False)
+
+        if not ids:
+            return Response({'error': 'ids required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        tenant = request.user.tenant
+        report_cards = ReportCard.objects.filter(
+            id__in=ids,
+            tenant=tenant,
+        ).select_related('student', 'classroom')
+
+        # Permission check
+        if _is_teacher(request.user):
+            report_cards = report_cards.filter(classroom_id__in=_teacher_classroom_ids(request.user))
+        if _is_parent(request.user):
+            report_cards = report_cards.filter(
+                student__primary_guardian__user=request.user,
+                status='published'
+            )
+
+        if not report_cards.exists():
+            return Response({'error': 'No report cards found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Create ZIP in memory
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for report_card in report_cards:
+                data, error = self._pdf_common_data(report_card, request)
+                if error:
+                    continue
+                pdf_response = self._build_pdf_response(report_card, data, include_grades=not exam_only)
+                pdf_content = pdf_response.content
+                filename = f'{report_card.student.admission_number}.pdf'
+                zip_file.writestr(filename, pdf_content)
+
+        zip_buffer.seek(0)
+        response = HttpResponse(zip_buffer.read(), content_type='application/zip')
+        response['Content-Disposition'] = 'attachment; filename="report_cards.zip"'
         return response
 
     @action(detail=False, methods=['get'], url_path='student/(?P<student_id>[^/.]+)')

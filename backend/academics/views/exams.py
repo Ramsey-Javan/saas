@@ -1,13 +1,14 @@
 """Exam setup and exam result viewsets."""
 import csv
 import io
+import logging
 from decimal import Decimal
 
 from django.db import transaction, IntegrityError, models
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
@@ -41,6 +42,14 @@ from .mixins import (
     _teacher_subject_ids,
     _validate_student_for_user,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _is_unique_violation(exc):
+    """Check if an IntegrityError is a unique constraint violation."""
+    msg = str(exc).lower()
+    return 'unique' in msg or 'duplicate' in msg
 
 
 def _teacher_has_subject_assignment(user, exam_subject):
@@ -77,26 +86,37 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         return ExamSetupSerializer
 
     def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+        if self.action in ['create', 'update', 'partial_update', 'destroy', 'update_subject', 'remove_subject']:
             return [IsAdminUser()]
         return [IsTeacherOrAdmin()]
 
     def perform_create(self, serializer):
         classroom = serializer.validated_data['classroom']
         if classroom.tenant_id != self.request.user.tenant_id:
-            raise ValidationError('Classroom must belong to your school.')
+            raise ValidationError({'classroom': ['Classroom must belong to your school.']})
         try:
             serializer.save(tenant=self.request.user.tenant, created_by=self.request.user)
-        except IntegrityError:
-            raise ValidationError(
-                'An exam with this name already exists for this class, term and academic year.'
-            )
+        except IntegrityError as exc:
+            if _is_unique_violation(exc):
+                raise ValidationError({
+                    'non_field_errors': ['An exam with this name already exists for this class, term and academic year.']
+                })
+            logger.exception("Unexpected IntegrityError during exam creation")
+            raise
 
     def perform_update(self, serializer):
         classroom = serializer.validated_data.get('classroom', serializer.instance.classroom)
         if classroom.tenant_id != self.request.user.tenant_id:
-            raise ValidationError('Classroom must belong to your school.')
-        serializer.save(tenant=self.request.user.tenant)
+            raise ValidationError({'classroom': ['Classroom must belong to your school.']})
+        try:
+            serializer.save(tenant=self.request.user.tenant)
+        except IntegrityError as exc:
+            if _is_unique_violation(exc):
+                raise ValidationError({
+                    'non_field_errors': ['An exam with this name already exists for this class, term and academic year.']
+                })
+            logger.exception("Unexpected IntegrityError during exam update")
+            raise
 
     @action(detail=True, methods=['post'], permission_classes=[IsTeacherOrAdmin], url_path='subjects')
     def add_subject(self, request, pk=None):
@@ -105,14 +125,67 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         subject = serializer.validated_data['subject']
         teacher = serializer.validated_data.get('teacher')
+
+        if ExamSubject.objects.filter(exam=exam, subject=subject, tenant=request.user.tenant).exists():
+            raise ValidationError({'subject': ['This subject is already assigned to this exam.']})
+
         if subject.tenant_id != request.user.tenant_id:
-            raise ValidationError('Subject must belong to your school.')
+            raise ValidationError({'subject': ['Subject must belong to your school.']})
         if teacher and teacher.tenant_id != request.user.tenant_id:
-            raise ValidationError('Teacher must belong to your school.')
+            raise ValidationError({'teacher': ['Teacher must belong to your school.']})
         if _is_teacher(request.user) and teacher != request.user:
             raise PermissionDenied('Teachers can only assign themselves to exam subjects.')
         exam_subject = serializer.save(tenant=request.user.tenant, exam=exam)
         return Response(ExamSubjectSerializer(exam_subject).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['patch'], permission_classes=[IsAdminUser], url_path='update-subject')
+    def update_subject(self, request, pk=None):
+        """Update total_marks or teacher on an existing exam subject."""
+        exam = self.get_object()
+        subject_id = request.data.get('subject_id')
+        if not subject_id:
+            raise ValidationError({'subject_id': ['This field is required.']})
+
+        try:
+            exam_subject = ExamSubject.objects.get(pk=subject_id, exam=exam, tenant=request.user.tenant)
+        except ExamSubject.DoesNotExist:
+            raise NotFound('Exam subject not found.')
+
+        new_subject_id = request.data.get('subject')
+        if new_subject_id and int(new_subject_id) != exam_subject.subject_id:
+            if ExamSubject.objects.filter(exam=exam, subject_id=new_subject_id, tenant=request.user.tenant).exists():
+                raise ValidationError({'subject': ['This subject is already assigned to this exam.']})
+
+        serializer = ExamSubjectSerializer(exam_subject, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        teacher = serializer.validated_data.get('teacher')
+        if teacher and teacher.tenant_id != request.user.tenant_id:
+            raise ValidationError({'teacher': ['Teacher must belong to your school.']})
+
+        serializer.save()
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminUser], url_path='remove-subject')
+    def remove_subject(self, request, pk=None):
+        """Remove an exam subject only if it has no results."""
+        exam = self.get_object()
+        subject_id = request.data.get('subject_id')
+        if not subject_id:
+            raise ValidationError({'subject_id': ['This field is required.']})
+
+        try:
+            exam_subject = ExamSubject.objects.get(pk=subject_id, exam=exam, tenant=request.user.tenant)
+        except ExamSubject.DoesNotExist:
+            raise NotFound('Exam subject not found.')
+
+        if exam_subject.results.exists():
+            raise ValidationError({
+                'non_field_errors': ['Cannot remove this subject because results have already been entered.']
+            })
+
+        exam_subject.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=['post'], permission_classes=[IsTeacherOrAdmin], url_path='sync-to-cbc')
     def sync_to_cbc(self, request, pk=None):
@@ -132,7 +205,6 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         total_synced = 0
         total_skipped = 0
 
-        # OPTIMIZATION 1: Pre-fetch all strands grouped by subject (not per result)
         subject_ids = list(results.values_list('exam_subject__subject_id', flat=True).distinct())
         strands_qs = Strand.objects.filter(
             subject_id__in=subject_ids,
@@ -145,7 +217,6 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         for strand in strands_qs:
             subject_strands.setdefault(strand.subject_id, []).append(strand)
 
-        # OPTIMIZATION 2: Bulk check existing CBCGrades once, use set for O(1) lookups
         student_ids = list(results.values_list('student_id', flat=True).distinct())
         all_outcome_ids = set()
         for strand in strands_qs:
@@ -180,9 +251,7 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 for strand in strands:
                     strand_level = strand_levels.get(strand.id, exam_level)
 
-                    # OPTIMIZATION 3: Use already-prefetched sub_strands (no extra query)
                     for sub_strand in strand.sub_strands.all():
-                        # OPTIMIZATION 4: Use already-prefetched outcomes (no extra query)
                         outcomes = list(sub_strand.outcomes.all())
                         outcome_levels = assign_outcome_levels(
                             strand_level=strand_level,
@@ -192,7 +261,6 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                         for outcome in outcomes:
                             outcome_level = outcome_levels.get(outcome.id, strand_level)
 
-                            # OPTIMIZATION 5: O(1) set lookup instead of DB .exists()
                             if (result.student_id, outcome.id) in existing_keys:
                                 total_skipped += 1
                                 continue
@@ -218,7 +286,6 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                                 assessed_by=request.user,
                             )
                             total_synced += 1
-                            # Track newly created to avoid duplicates within this run
                             existing_keys.add((result.student_id, outcome.id))
 
         ExamCBCSync.objects.create(
@@ -246,7 +313,6 @@ class ExamSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         students = Student.objects.filter(tenant=tenant, classroom=exam.classroom, is_active=True).order_by('last_name', 'first_name')
         exam_subjects = exam.exam_subjects.select_related('subject').all()
         if _is_teacher(request.user):
-            # Check both explicit ExamSubject.teacher AND ClassSubjectAssignment
             exam_subjects = exam_subjects.filter(
                 models.Q(teacher=request.user) |
                 models.Q(
@@ -362,11 +428,10 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         exam_subject = data['exam_subject']
         student = data['student']
         if exam_subject.tenant_id != self.request.user.tenant_id or student.tenant_id != self.request.user.tenant_id:
-            raise ValidationError('Exam subject and student must belong to your school.')
+            raise ValidationError({'non_field_errors': ['Exam subject and student must belong to your school.']})
         if student.classroom_id != exam_subject.exam.classroom_id:
-            raise ValidationError('Student must be in the exam classroom.')
+            raise ValidationError({'student': ['Student must be in the exam classroom.']})
         if _is_teacher(self.request.user):
-            # Check explicit ExamSubject.teacher first, then fall back to ClassSubjectAssignment
             if exam_subject.teacher_id == self.request.user.id:
                 return
             if not _teacher_has_subject_assignment(self.request.user, exam_subject):
@@ -379,7 +444,7 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         academic_year = request.query_params.get('academic_year')
 
         if not student_id:
-            return Response({'error': 'student param required'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': {'code': 'validation_error', 'message': 'student param required', 'details': {}}}, status=status.HTTP_400_BAD_REQUEST)
 
         _validate_student_for_user(request.user, student_id)
         qs = self.get_queryset().filter(student_id=student_id)
@@ -390,7 +455,7 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
         serializer = self.get_serializer(qs, many=True)
         return Response(serializer.data)
-    
+
     @action(detail=False, methods=['post'], url_path='bulk')
     def bulk_enter(self, request):
         serializer = BulkExamResultSerializer(data=request.data)
@@ -400,10 +465,10 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         exam_subject = data['exam_subject']
 
         if exam_subject.tenant_id != tenant.id:
-            raise ValidationError({'exam_subject': 'Exam subject not found in this school.'})
+            raise ValidationError({'exam_subject': ['Exam subject not found in this school.']})
         if _is_teacher(request.user):
             if exam_subject.teacher_id == request.user.id:
-                pass  # OK - explicitly assigned
+                pass
             elif not _teacher_has_subject_assignment(request.user, exam_subject):
                 raise PermissionDenied('You can only enter marks for your assigned exam subjects.')
 
@@ -458,29 +523,25 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         file = request.FILES.get('file')
         exam_setup_id = request.data.get('exam_setup')
         if not file or not exam_setup_id:
-            return Response({'error': 'file and exam_setup required'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': {'code': 'validation_error', 'message': 'file and exam_setup required', 'details': {}}}, status=status.HTTP_400_BAD_REQUEST)
 
         tenant = request.user.tenant
         exam = ExamSetup.objects.filter(id=exam_setup_id, tenant=tenant).first()
         if not exam:
-            return Response({'error': 'Exam not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': {'code': 'not_found', 'message': 'Exam not found.', 'details': {}}}, status=status.HTTP_404_NOT_FOUND)
 
-        # Build subject lookup: code -> ExamSubject
         exam_subjects = {es.subject.code.upper(): es for es in exam.exam_subjects.all()}
         if not exam_subjects:
-            return Response({'error': 'No subjects configured for this exam.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': {'code': 'validation_error', 'message': 'No subjects configured for this exam.', 'details': {}}}, status=status.HTTP_400_BAD_REQUEST)
 
         config = ExamConfig.get_for_tenant(tenant)
         content = file.read().decode('utf-8')
         reader = csv.DictReader(io.StringIO(content))
 
-        # Normalize headers
         fieldnames = [h.strip().upper() for h in (reader.fieldnames or [])]
         if 'ADMISSION_NUMBER' not in fieldnames:
-            return Response({'error': 'CSV must have an admission_number column.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': {'code': 'validation_error', 'message': 'CSV must have an admission_number column.', 'details': {}}}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Map subject codes to column names (case-insensitive)
-        # Explicitly skip non-subject columns like admission_number and name
         subject_code_map = {}
         for header in fieldnames:
             h_upper = header.upper()
@@ -491,7 +552,7 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
         if not subject_code_map:
             return Response(
-                {'error': f'No valid subject columns found in CSV. Expected one of: {", ".join(sorted(exam_subjects.keys()))}'},
+                {'error': {'code': 'validation_error', 'message': f'No valid subject columns found in CSV. Expected one of: {", ".join(sorted(exam_subjects.keys()))}', 'details': {}}},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -515,7 +576,7 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 for col_name, subject_code in subject_code_map.items():
                     marks_str = row.get(subject_code, '')
                     if not marks_str:
-                        continue  # skip empty cells
+                        continue
 
                     try:
                         marks = Decimal(marks_str)
@@ -530,7 +591,7 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
                     if _is_teacher(request.user):
                         if exam_subject.teacher_id == request.user.id:
-                            pass  # OK
+                            pass
                         elif not _teacher_has_subject_assignment(request.user, exam_subject):
                             errors.append({'row': i, 'field': subject_code, 'message': f'Subject {subject_code} is not assigned to you'})
                             continue
@@ -565,3 +626,4 @@ class ExamResultViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             'errors': errors,
             'total_rows_processed': created + updated + len(errors),
         })
+    

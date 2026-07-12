@@ -5,7 +5,7 @@ import {
   MessageSquare, LayoutDashboard, LogOut,
   Menu, ChevronRight, Settings, AlertCircle, FilePlus,
   CheckSquare, FileText, Calendar, ClipboardList, Award, Globe,
-  Search, Command, Crown, Key
+  Search, Command, Crown, Key, BarChart3
 } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { cn } from '@/lib/utils'
@@ -23,6 +23,7 @@ const SEARCH_ALLOWED_ROLES = ['admin', 'superadmin']
 const NAV_ITEMS = {
   admin: [
     { label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
+    { label: 'Analytics', icon: BarChart3, href: '/analytics' },
     { label: 'Students', icon: Users, href: '/students' },
     { label: 'Staff', icon: Users, href: '/staff' },
     { label: 'Finance', icon: DollarSign, href: '/finance' },
@@ -40,6 +41,7 @@ const NAV_ITEMS = {
   ],
   teacher: [
     { label: 'Dashboard', icon: LayoutDashboard, href: '/teacher' },
+    { label: 'Analytics', icon: BarChart3, href: '/analytics' },
     { label: 'Students', icon: Users, href: '/students' },
     { label: 'My Classes', icon: Users, href: '/teacher/classes' },
     { label: 'Grades', icon: BookOpen, href: '/academics/grades' },

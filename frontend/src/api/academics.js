@@ -49,6 +49,8 @@ export const academicsApi = {
   updateExamSetup: (id, data) => api.patch(`/academics/exam-setups/${id}/`, data),
   deleteExamSetup: (id) => api.delete(`/academics/exam-setups/${id}/`),
   addExamSubject: (id, data) => api.post(`/academics/exam-setups/${id}/subjects/`, data),
+  updateExamSubject: (examId, data) => api.patch(`/academics/exam-setups/${examId}/update-subject/`, data),
+  removeExamSubject: (examId, subjectId) => api.post(`/academics/exam-setups/${examId}/remove-subject/`, { subject_id: subjectId }),
   getMarksSheet: (id) => api.get(`/academics/exam-setups/${id}/marks-sheet/`),
   syncToCBC: (id) => api.post(`/academics/exam-setups/${id}/sync-to-cbc/`),
   getSyncHistory: (id) => api.get(`/academics/exam-setups/${id}/sync-history/`),
@@ -109,6 +111,12 @@ export const academicsApi = {
   generateAnnualReportCards: (data) => api.post('/academics/report-cards/generate-annual/', data),
   publishReportCard: (id) => api.post(`/academics/report-cards/${id}/publish/`),
   getReportCardPdf: (id) => api.get(`/academics/report-cards/${id}/pdf/`, {
+    responseType: 'blob',
+  }),
+  getReportCardExamPdf: (id) => api.get(`/academics/report-cards/${id}/exam-pdf/`, {
+    responseType: 'blob',
+  }),
+  bulkDownloadPdfs: (data) => api.post('/academics/report-cards/bulk-pdf/', data, {
     responseType: 'blob',
   }),
   getStudentReportCards: (studentId) => api.get(`/academics/report-cards/student/${studentId}/`),

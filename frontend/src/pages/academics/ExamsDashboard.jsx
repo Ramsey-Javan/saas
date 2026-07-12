@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ClipboardList, Plus, Settings, RefreshCw } from 'lucide-react'
+import { ClipboardList, Plus, Settings, RefreshCw, Pencil } from 'lucide-react'
 import { academicsApi } from '@/api/academics'
 import { studentsApi } from '@/api/students'
 import { useAuthStore } from '@/store/authStore'
@@ -17,25 +17,38 @@ const EXAM_TYPES = [
 
 const defaults = { be_min: 0, be_max: 29, ae_min: 30, ae_max: 49, me_min: 50, me_max: 74, ee_min: 75, ee_max: 100 }
 
-// ── BUG FIX: reusable error-message extraction, matching the pattern
-// already used in PaymentModal.jsx. DRF's default exception handling
-// returns { detail: "..." } for PermissionDenied/404s, but the axios
-// interceptor's generic fallback only checks `.message` -- so every real
-// backend error was silently replaced with a useless "Something went
-// wrong." This checks the actual shapes DRF returns and falls back to a
-// clear, specific default only as a last resort.
 function extractSyncError(err) {
-  const data = err?.response?.data
-  if (!data) return 'Could not sync grades to CBC. Check your connection and try again.'
-  if (data.detail) return data.detail
-  if (data.error) return data.error
-  if (typeof data === 'string') return data
+  if (!err?.response) {
+    return 'Network error. Please check your connection and try again.'
+  }
+  const data = err.response.data
+  if (typeof data === 'string') {
+    return data.replace(/<[^>]*>/g, '').substring(0, 200) || 'An error occurred.'
+  }
+  if (!data) {
+    return err.message || 'An unexpected error occurred.'
+  }
+  if (data.error?.message) {
+    return data.error.message
+  }
+  if (data.detail) {
+    return data.detail
+  }
+  if (Array.isArray(data.non_field_errors) && data.non_field_errors.length > 0) {
+    return data.non_field_errors[0]
+  }
   const firstKey = Object.keys(data)[0]
-  if (!firstKey) return 'Could not sync grades to CBC. Check your connection and try again.'
-  const value = data[firstKey]
-  return Array.isArray(value) ? value[0] : value
+  if (firstKey) {
+    const value = data[firstKey]
+    if (Array.isArray(value) && value.length > 0) {
+      return value[0]
+    }
+    if (typeof value === 'string') {
+      return value
+    }
+  }
+  return err.message || 'An unexpected error occurred. Please try again.'
 }
-// ── END BUG FIX ──
 
 function ExamConfigModal({ onClose }) {
   const [form, setForm] = useState(defaults)
@@ -61,7 +74,7 @@ function ExamConfigModal({ onClose }) {
       await academicsApi.updateExamConfig(form)
       onClose()
     } catch (err) {
-      setError(err.response?.data?.detail || err.response?.data?.non_field_errors?.[0] || 'Could not save thresholds.')
+      setError(extractSyncError(err))
     } finally {
       setSaving(false)
     }
@@ -115,7 +128,6 @@ function CreateExamModal({ classrooms, onClose, onDone }) {
     subjects: [],
   })
 
-  // Fetch subjects filtered by selected classroom
   useEffect(() => {
     if (!form.classroom) {
       setAvailableSubjects([])
@@ -141,7 +153,7 @@ function CreateExamModal({ classrooms, onClose, onDone }) {
     setForm(current => ({
       ...current,
       classroom: classroomId,
-      subjects: [], // Clear selected subjects when classroom changes
+      subjects: [],
     }))
   }
 
@@ -211,6 +223,239 @@ function CreateExamModal({ classrooms, onClose, onDone }) {
   )
 }
 
+function EditExamModal({ examId, onClose, onDone }) {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [form, setForm] = useState({
+    name: '',
+    exam_type: 'endterm',
+    start_date: '',
+    end_date: '',
+    instructions: '',
+    is_active: true,
+  })
+  const [subjects, setSubjects] = useState([])
+  const [allSubjects, setAllSubjects] = useState([])
+  const [newSubjectIds, setNewSubjectIds] = useState([])
+  const [subjectsToRemove, setSubjectsToRemove] = useState([])
+  const [subjectEdits, setSubjectEdits] = useState({})
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const { data: exam } = await academicsApi.getExamSetup(examId)
+        if (cancelled) return
+        const { data: subjectsData } = await academicsApi.getSubjects({ classroom: exam.classroom })
+        if (cancelled) return
+
+        setForm({
+          name: exam.name,
+          exam_type: exam.exam_type,
+          start_date: exam.start_date,
+          end_date: exam.end_date,
+          instructions: exam.instructions || '',
+          is_active: exam.is_active,
+        })
+        setSubjects(exam.exam_subjects || [])
+        setAllSubjects(listFromResponse(subjectsData))
+      } catch (err) {
+        if (!cancelled) setError(extractSyncError(err))
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [examId])
+
+  const assignedSubjectIds = useMemo(() => {
+    const ids = new Set()
+    subjects.forEach(s => {
+      if (!subjectsToRemove.includes(s.id)) {
+        ids.add(s.subject)
+      }
+    })
+    newSubjectIds.forEach(id => ids.add(id))
+    return ids
+  }, [subjects, subjectsToRemove, newSubjectIds])
+
+  const availableForAdding = useMemo(() => {
+    return allSubjects.filter(s => !assignedSubjectIds.has(s.id))
+  }, [allSubjects, assignedSubjectIds])
+
+  const toggleNewSubject = (id) => {
+    setNewSubjectIds(current =>
+      current.includes(id) ? current.filter(x => x !== id) : [...current, id]
+    )
+  }
+
+  const toggleRemoveSubject = (id) => {
+    setSubjectsToRemove(current =>
+      current.includes(id) ? current.filter(x => x !== id) : [...current, id]
+    )
+  }
+
+  const editSubjectField = (id, field, value) => {
+    setSubjectEdits(current => ({
+      ...current,
+      [id]: { ...current[id], [field]: value }
+    }))
+  }
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setSaving(true)
+    setError('')
+    try {
+      await academicsApi.updateExamSetup(examId, form)
+
+      for (const subject of subjects) {
+        const isRemoving = subjectsToRemove.includes(subject.id)
+        const edits = subjectEdits[subject.id]
+
+        if (isRemoving) {
+          await academicsApi.removeExamSubject(examId, subject.id)
+        } else if (edits && Object.keys(edits).length > 0) {
+          await academicsApi.updateExamSubject(examId, {
+            subject_id: subject.id,
+            ...edits,
+          })
+        }
+      }
+
+      for (const subjectId of newSubjectIds) {
+        await academicsApi.addExamSubject(examId, { subject: subjectId, total_marks: 100 })
+      }
+
+      onDone()
+      onClose()
+    } catch (err) {
+      setError(extractSyncError(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <Modal title="Edit Exam" onClose={onClose}>
+        <div className="flex justify-center py-8"><Spinner className="h-6 w-6" /></div>
+      </Modal>
+    )
+  }
+
+  return (
+    <Modal
+      title="Edit Exam"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button type="submit" form="edit-exam-form" loading={saving}>Save Changes</Button>
+        </>
+      }
+    >
+      <form id="edit-exam-form" onSubmit={submit} className="space-y-4">
+        {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Input label="Exam Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
+          <Select label="Exam Type" value={form.exam_type} onChange={e => setForm(f => ({ ...f, exam_type: e.target.value }))}>
+            {EXAM_TYPES.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
+          </Select>
+          <Input label="Start Date" type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} required />
+          <Input label="End Date" type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} required />
+        </div>
+        <textarea
+          value={form.instructions}
+          onChange={e => setForm(f => ({ ...f, instructions: e.target.value }))}
+          placeholder="Instructions"
+          className="min-h-20 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[var(--brand-primary)]"
+        />
+        <label className="flex items-center gap-2 text-sm text-gray-700">
+          <input
+            type="checkbox"
+            checked={form.is_active}
+            onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))}
+          />
+          Exam is active
+        </label>
+
+        <div>
+          <p className="mb-2 text-sm font-medium text-gray-700">Subjects</p>
+          {subjects.length === 0 && newSubjectIds.length === 0 ? (
+            <p className="text-sm text-gray-500">No subjects assigned.</p>
+          ) : (
+            <div className="space-y-2 max-h-52 overflow-y-auto">
+              {subjects.map(subject => {
+                const isRemoving = subjectsToRemove.includes(subject.id)
+                const hasResults = subject.results_count > 0
+                const edits = subjectEdits[subject.id] || {}
+                return (
+                  <div key={subject.id} className={`rounded-lg border p-3 ${isRemoving ? 'opacity-50 bg-red-50 border-red-100' : 'border-gray-100'}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium">{subject.subject_name}</span>
+                      <div className="flex items-center gap-2">
+                        {hasResults && <span className="text-xs text-gray-500">Locked ({subject.results_count} results)</span>}
+                        {!hasResults && (
+                          <button
+                            type="button"
+                            onClick={() => toggleRemoveSubject(subject.id)}
+                            className="text-xs text-red-600 hover:text-red-800"
+                          >
+                            {isRemoving ? 'Undo Remove' : 'Remove'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {!isRemoving && (
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <Input
+                          label="Total Marks"
+                          type="number"
+                          min="1"
+                          value={edits.total_marks !== undefined ? edits.total_marks : subject.total_marks}
+                          onChange={e => editSubjectField(subject.id, 'total_marks', e.target.value === '' ? '' : Number(e.target.value))}
+                        />
+                        <Input
+                          label="Teacher ID"
+                          type="number"
+                          value={edits.teacher !== undefined ? edits.teacher : (subject.teacher || '')}
+                          onChange={e => editSubjectField(subject.id, 'teacher', e.target.value ? Number(e.target.value) : null)}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {availableForAdding.length > 0 && (
+          <div>
+            <p className="mb-2 text-sm font-medium text-gray-700">Add Subjects</p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 max-h-40 overflow-y-auto">
+              {availableForAdding.map(subject => (
+                <label key={subject.id} className="flex items-center gap-2 rounded-lg border border-gray-100 px-3 py-2 text-sm hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newSubjectIds.includes(subject.id)}
+                    onChange={() => toggleNewSubject(subject.id)}
+                  />
+                  <span>{subject.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+      </form>
+    </Modal>
+  )
+}
+
 export default function ExamsDashboard() {
   const navigate = useNavigate()
   const user = useAuthStore(state => state.user)
@@ -223,12 +468,8 @@ export default function ExamsDashboard() {
   const [createOpen, setCreateOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
-  // ── BUG FIX: track which exam is currently syncing (by id) so we can
-  // show a real in-progress state on that specific card, and disable its
-  // button so a second click can't fire a duplicate sync while one is
-  // already running.
   const [syncingId, setSyncingId] = useState(null)
-  // ── END BUG FIX ──
+  const [editingExamId, setEditingExamId] = useState(null)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -255,13 +496,6 @@ export default function ExamsDashboard() {
     return { active, results, pending, synced }
   }, [exams])
 
-  // ── BUG FIX: syncExam previously had no try/catch at all -- any
-  // failure (permission denied, exam not found, server error) became an
-  // uncaught promise rejection, and the only feedback the person ever
-  // saw was the interceptor's generic "Something went wrong." (since
-  // DRF returns `detail`, not `message`, which is all the interceptor
-  // checks). Now shows a real in-progress state and surfaces the actual
-  // reason on failure.
   const syncExam = async (id) => {
     setError('')
     setMessage('')
@@ -276,7 +510,6 @@ export default function ExamsDashboard() {
       setSyncingId(null)
     }
   }
-  // ── END BUG FIX ──
 
   if (loading) return <div className="flex justify-center py-20"><Spinner className="h-7 w-7" /></div>
 
@@ -340,12 +573,6 @@ export default function ExamsDashboard() {
                 </div>
                 <p className="mt-1 text-xs text-gray-500">{progress}% marks entry completion</p>
                 {exam.last_sync_at && <p className="mt-2 text-xs text-green-700">Last synced {new Date(exam.last_sync_at).toLocaleString()}</p>}
-                {/* ── BUG FIX: indeterminate sync-in-progress indicator.
-                    sync_to_cbc runs as one atomic transaction with no
-                    progress-reporting from the backend, so this can't be
-                    a real percentage -- but an animated bar + status text
-                    makes it unmistakable that something is happening,
-                    instead of the button just going quiet. */}
                 {isSyncing && (
                   <div className="mt-3">
                     <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
@@ -354,13 +581,17 @@ export default function ExamsDashboard() {
                     <p className="mt-1 text-xs text-gray-500">Syncing grades to CBC…</p>
                   </div>
                 )}
-                {/* ── END BUG FIX ── */}
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button size="sm" onClick={() => navigate(`/academics/exams/${exam.id}`)} disabled={isSyncing}>Enter Marks</Button>
                   <Button size="sm" variant="secondary" disabled={!exam.results_count || isSyncing} loading={isSyncing} onClick={() => syncExam(exam.id)}>
                     {isSyncing ? 'Syncing...' : 'Sync to CBC'}
                   </Button>
                   <Button size="sm" variant="secondary" onClick={() => navigate(`/academics/exams/${exam.id}/results`)} disabled={isSyncing}>View Results</Button>
+                  {isAdmin && (
+                    <Button size="sm" variant="secondary" onClick={() => setEditingExamId(exam.id)} disabled={isSyncing} className="gap-1">
+                      <Pencil size={14} /> Edit
+                    </Button>
+                  )}
                 </div>
               </Card>
             )
@@ -369,8 +600,13 @@ export default function ExamsDashboard() {
       )}
       {configOpen && <ExamConfigModal onClose={() => setConfigOpen(false)} />}
       {createOpen && <CreateExamModal classrooms={classrooms} onClose={() => setCreateOpen(false)} onDone={fetchData} />}
-      {/* Indeterminate progress bar keyframes -- slides a segment back and
-          forth to signal ongoing work without claiming a real percentage. */}
+      {editingExamId && (
+        <EditExamModal
+          examId={editingExamId}
+          onClose={() => setEditingExamId(null)}
+          onDone={fetchData}
+        />
+      )}
       <style>{`
         @keyframes syncbar {
           0% { transform: translateX(-100%); }

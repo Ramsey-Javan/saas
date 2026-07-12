@@ -107,6 +107,7 @@ class ExamSubjectSerializer(serializers.ModelSerializer):
             'id', 'exam', 'subject', 'subject_name', 'subject_code',
             'total_marks', 'teacher', 'teacher_name', 'results_count',
         ]
+        read_only_fields = ['exam']
 
     def get_subject_name(self, obj):
         return obj.subject.name
@@ -142,19 +143,48 @@ class ExamSetupSerializer(serializers.ModelSerializer):
         read_only_fields = ['created_by', 'created_at']
 
     def validate(self, attrs):
-        if self.instance is None:  # creating new
-            request = self.context.get('request')
-            tenant = getattr(request.user, 'tenant', None) if request else None
-            if tenant and ExamSetup.objects.filter(
-                tenant=tenant,
-                name=attrs.get('name'),
-                classroom=attrs.get('classroom'),
-                term=attrs.get('term'),
-                academic_year=attrs.get('academic_year'),
-            ).exists():
-                raise serializers.ValidationError({
-                    'detail': 'An exam with this name already exists for this class, term and academic year.'
-                })
+        start_date = attrs.get('start_date')
+        end_date = attrs.get('end_date')
+        if self.instance:
+            start_date = start_date or self.instance.start_date
+            end_date = end_date or self.instance.end_date
+        if start_date and end_date and start_date > end_date:
+            raise serializers.ValidationError({
+                'non_field_errors': ['Start date must be before or equal to end date.']
+            })
+
+        # ── HARDENING: uniqueness on BOTH create AND update ──
+        request = self.context.get('request')
+        tenant = getattr(request.user, 'tenant', None) if request else None
+        if tenant:
+            name = attrs.get('name', getattr(self.instance, 'name', None))
+            classroom = attrs.get('classroom', getattr(self.instance, 'classroom', None))
+            term = attrs.get('term', getattr(self.instance, 'term', None))
+            academic_year = attrs.get('academic_year', getattr(self.instance, 'academic_year', None))
+
+            if name and classroom and term and academic_year:
+                qs = ExamSetup.objects.filter(
+                    tenant=tenant,
+                    name=name,
+                    classroom=classroom,
+                    term=term,
+                    academic_year=academic_year,
+                )
+                if self.instance:
+                    qs = qs.exclude(pk=self.instance.pk)
+                if qs.exists():
+                    raise serializers.ValidationError({
+                        'non_field_errors': ['An exam with this name already exists for this class, term and academic year.']
+                    })
+
+        # ── HARDENING: prevent classroom change after results exist ──
+        if self.instance and 'classroom' in attrs:
+            if attrs['classroom'] != self.instance.classroom:
+                if self.instance.exam_subjects.filter(results__isnull=False).exists():
+                    raise serializers.ValidationError({
+                        'classroom': ['Cannot change classroom after results have been entered.']
+                    })
+
         return attrs
 
     def get_classroom_name(self, obj):
@@ -268,7 +298,7 @@ class ExamResultSerializer(serializers.ModelSerializer):
                 if value > exam_subject.total_marks:
                     raise serializers.ValidationError(f'Marks cannot exceed {exam_subject.total_marks} (total marks for this subject).')
             except ExamSubject.DoesNotExist:
-                pass
+                raise serializers.ValidationError('Invalid exam subject.')
         if value < 0:
             raise serializers.ValidationError('Marks cannot be negative.')
         return value
@@ -302,3 +332,4 @@ class ExamCBCSyncSerializer(serializers.ModelSerializer):
 
     def get_exam_name(self, obj):
         return obj.exam.name
+    
