@@ -23,7 +23,6 @@ const SEARCH_ALLOWED_ROLES = ['admin', 'superadmin']
 const NAV_ITEMS = {
   admin: [
     { label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
-    { label: 'Analytics', icon: BarChart3, href: '/analytics' },
     { label: 'Students', icon: Users, href: '/students' },
     { label: 'Staff', icon: Users, href: '/staff' },
     { label: 'Finance', icon: DollarSign, href: '/finance' },
@@ -32,6 +31,7 @@ const NAV_ITEMS = {
     { label: 'Academics', icon: GraduationCap, href: '/academics' },
     { label: 'Exams', icon: ClipboardList, href: '/academics/exams' },
     { label: 'National Exams', icon: Award, href: '/academics/national-exams' },
+    { label: 'Analytics', icon: BarChart3, href: '/analytics' },
     { label: 'Communication', icon: MessageSquare, href: '/communication' },
     { label: 'Settings', icon: Settings, href: '/settings/school-profile' },
   ],
