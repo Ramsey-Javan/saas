@@ -12,7 +12,7 @@ from .mixins import (
     outstanding_expression,
     total_due_expression,
 )
-from .payments import MpesaViewSet, PaymentViewSet, ReceiptViewSet
+from .payments import MpesaViewSet, PaymentViewSet, ReceiptViewSet, MpesaCallbackWebhookView
 from .statements import (
     bulk_invoice_pdf,
     bulk_receipts_pdf,

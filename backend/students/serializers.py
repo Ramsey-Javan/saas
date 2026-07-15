@@ -31,7 +31,7 @@ class GuardianSerializer(serializers.ModelSerializer):
 class StudentListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for list views."""
     full_name = serializers.SerializerMethodField()
-    classroom_name = serializers.SerializerMethodField()
+    classroom = serializers.SerializerMethodField()  # Replaces raw FK + classroom_name
     guardian_phone = serializers.SerializerMethodField()
     age = serializers.ReadOnlyField()
 
@@ -39,19 +39,26 @@ class StudentListSerializer(serializers.ModelSerializer):
         model = Student
         fields = [
             'id', 'admission_number', 'full_name', 'first_name', 'last_name',
-            'gender', 'classroom', 'classroom_name', 'status',
+            'gender', 'classroom', 'status',
             'guardian_phone', 'age', 'photo',
         ]
 
     def get_full_name(self, obj):
         return obj.get_full_name()
 
-    def get_classroom_name(self, obj):
-        return str(obj.classroom) if obj.classroom else None
+    def get_classroom(self, obj):
+        """Return a lightweight classroom object instead of a raw ID."""
+        if not obj.classroom:
+            return None
+        return {
+            'id': obj.classroom.id,
+            'name': obj.classroom.name,
+            'stream': obj.classroom.stream,
+            'academic_year': obj.classroom.academic_year,
+        }
 
     def get_guardian_phone(self, obj):
         return obj.primary_guardian.phone if obj.primary_guardian else None
-
 
 class StudentDetailSerializer(serializers.ModelSerializer):
     """Full serializer for create/retrieve/update."""

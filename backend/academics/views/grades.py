@@ -13,6 +13,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from students.models import Student
+from academics.views.mixins import _is_admin, _is_teacher
 
 from ..models import CBCGrade, ExamConfig, LearningOutcome,ExamResult, ExamSetup, ExamSubject
 from ..permissions import IsTeacherOrAdmin

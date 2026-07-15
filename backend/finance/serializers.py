@@ -1,7 +1,21 @@
-# backend/finance/serializers.py
+import re
+from decimal import Decimal
 from rest_framework import serializers
-from .models import FeeStructure, StudentFee, Payment, Receipt, WaiverPolicy, StudentWaiver
 
+from .models import (
+    FeeStructure, 
+    StudentFee, 
+    Payment, 
+    Receipt, 
+    WaiverPolicy, 
+    StudentWaiver,
+    PaymentLog,
+)
+
+
+# ==========================================
+# 1. FEE STRUCTURE SERIALIZER
+# ==========================================
 class FeeStructureSerializer(serializers.ModelSerializer):
     # Fields that determine how much a student owes. Once any invoice has
     # been generated from this fee structure, these are locked -- editing
@@ -9,6 +23,14 @@ class FeeStructureSerializer(serializers.ModelSerializer):
     # change a fee mid-year, create a NEW FeeStructure for the next term
     # instead (e.g. "from Term 2, fees increase to X").
     LOCKED_AFTER_INVOICING = ['base_amount', 'late_penalty_amount', 'late_penalty_days']
+
+    class Meta:
+        model = FeeStructure
+        fields = [
+            'id', 'classroom', 'term', 'academic_year', 'base_amount', 'due_date',
+            'late_penalty_amount', 'late_penalty_days', 'is_active', 'created_at'
+        ]
+        read_only_fields = ('id', 'tenant', 'created_at')
 
     def validate(self, attrs):
         request = self.context.get('request')
@@ -64,17 +86,14 @@ class FeeStructureSerializer(serializers.ModelSerializer):
                 )
         return attrs
 
-    class Meta:
-        model = FeeStructure
-        fields = [
-            'id', 'classroom', 'term', 'academic_year', 'base_amount', 'due_date',
-            'late_penalty_amount', 'late_penalty_days', 'is_active', 'created_at'
-        ]
-        read_only_fields = ['tenant', 'created_at']
 
+# ==========================================
+# 2. STUDENT FEE SERIALIZER
+# ==========================================
 class StudentFeeSerializer(serializers.ModelSerializer):
     """Includes computed balance and nested student/classroom info for UI"""
     balance = serializers.SerializerMethodField()
+    overpayment = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     effective_balance = serializers.SerializerMethodField()
     student_name = serializers.CharField(source='student.get_full_name', read_only=True)
     admission_number = serializers.CharField(source='student.admission_number', read_only=True)
@@ -87,10 +106,10 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'student', 'student_name', 'admission_number', 'classroom_name',
             'fee_structure', 'fee_term', 'fee_academic_year', 'expected_amount', 'waived_amount', 'carried_forward',
-            'penalty_amount', 'paid_amount', 'credit', 'balance', 'effective_balance', 'status', 'due_date',
-            'created_at', 'updated_at'
+            'penalty_amount', 'paid_amount', 'credit', 'balance', 'overpayment', 'effective_balance', 'status', 'due_date',
+            'created_at', 'updated_at', 'tenant'
         ]
-        read_only_fields = ['balance', 'tenant', 'created_at', 'updated_at']
+        read_only_fields = ('id', 'tenant', 'created_at', 'updated_at', 'paid_amount', 'balance', 'effective_balance')
 
     def get_balance(self, obj):
         # Balance exposed in UI must reflect effective balance after waivers and payments
@@ -99,33 +118,68 @@ class StudentFeeSerializer(serializers.ModelSerializer):
     def get_effective_balance(self, obj):
         return obj.effective_balance
 
+
+# ==========================================
+# 3. PAYMENT LOG SERIALIZER
+# ==========================================
+class PaymentLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentLog
+        fields = ['id', 'event_type', 'result_code', 'result_desc', 'created_at', 'payload']
+        read_only_fields = fields
+
+
+# ==========================================
+# 4. PAYMENT SERIALIZER
+# ==========================================
 class PaymentSerializer(serializers.ModelSerializer):
+    logs = PaymentLogSerializer(many=True, read_only=True)
     receipt_number = serializers.CharField(source='receipt.receipt_number', read_only=True)
     student_name = serializers.CharField(source='student.get_full_name', read_only=True)
     admission_number = serializers.CharField(source='student.admission_number', read_only=True)
     classroom_name = serializers.CharField(source='student.classroom.name', read_only=True)
-    
+
     class Meta:
         model = Payment
         fields = [
             'id', 'student', 'student_fee', 'amount', 'payment_method', 'status',
-            'mpesa_receipt_number', 'mpesa_checkout_request_id', 'mpesa_transaction_date',
-            'payment_date', 'bank_name', 'bank_reference', 'cheque_number', 'drawer_name',
-            'idempotency_key', 'recorded_by', 'notes', 'receipt_number',
-            'student_name', 'admission_number', 'classroom_name', 'created_at'
+            'mpesa_receipt_number', 'mpesa_checkout_request_id', 'mpesa_merchant_request_id',
+            'mpesa_transaction_date', 'payment_date', 'bank_name', 'bank_reference', 
+            'cheque_number', 'drawer_name', 'idempotency_key', 'recorded_by', 'notes', 
+            'receipt_number', 'student_name', 'admission_number', 'classroom_name', 
+            'resolved_at', 'failed_at', 'system_notes', 'created_at', 'tenant', 'logs'
         ]
-        read_only_fields = ['tenant', 'status', 'recorded_by', 'created_at']
+        read_only_fields = (
+            'id', 'tenant', 'status', 'recorded_by', 'created_at', 
+            'mpesa_checkout_request_id', 'mpesa_receipt_number', 
+            'mpesa_merchant_request_id', 'resolved_at', 'failed_at', 'system_notes'
+        )
 
+
+# ==========================================
+# 5. RECEIPT SERIALIZER
+# ==========================================
 class ReceiptSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source='student.get_full_name', read_only=True)
-    
+
     class Meta:
         model = Receipt
         fields = '__all__'
-        read_only_fields = ['tenant', 'receipt_number', 'issued_at']
+        read_only_fields = ('id', 'tenant', 'receipt_number', 'issued_at')
 
 
+# ==========================================
+# 6. WAIVER POLICY SERIALIZER
+# ==========================================
 class WaiverPolicySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WaiverPolicy
+        fields = [
+            'id', 'category', 'discount_type', 'discount_value', 'is_active',
+            'description', 'created_by', 'created_at', 'tenant'
+        ]
+        read_only_fields = ('id', 'tenant', 'created_by', 'created_at')
+
     def validate(self, attrs):
         discount_type = attrs.get('discount_type') or getattr(self.instance, 'discount_type', None)
         discount_value = attrs.get('discount_value')
@@ -143,15 +197,10 @@ class WaiverPolicySerializer(serializers.ModelSerializer):
 
         return attrs
 
-    class Meta:
-        model = WaiverPolicy
-        fields = [
-            'id', 'category', 'discount_type', 'discount_value', 'is_active',
-            'description', 'created_by', 'created_at'
-        ]
-        read_only_fields = ['tenant', 'created_by', 'created_at']
 
-
+# ==========================================
+# 7. STUDENT WAIVER SERIALIZER
+# ==========================================
 class StudentWaiverSerializer(serializers.ModelSerializer):
     policy_category = serializers.CharField(source='policy.get_category_display', read_only=True)
     policy_discount = serializers.SerializerMethodField()
@@ -165,7 +214,7 @@ class StudentWaiverSerializer(serializers.ModelSerializer):
     invoice_paid = serializers.SerializerMethodField()
     invoice_balance = serializers.SerializerMethodField()
     supporting_document = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = StudentWaiver
         fields = [
@@ -175,10 +224,10 @@ class StudentWaiverSerializer(serializers.ModelSerializer):
             'valid_from_term', 'valid_from_year', 'valid_until_term', 'valid_until_year',
             'invoice_original_amount', 'invoice_waived_amount', 'invoice_net_due',
             'invoice_paid', 'invoice_balance',
-            'supporting_document', 'notes', 'is_active', 'created_at'
+            'supporting_document', 'notes', 'is_active', 'created_at', 'tenant'
         ]
-        read_only_fields = ['tenant', 'approved_on', 'created_at']
-    
+        read_only_fields = ('id', 'tenant', 'created_at', 'approved_on')
+
     def get_policy_discount(self, obj):
         policy = obj.policy
         if policy.discount_type == 'percentage':
@@ -195,6 +244,7 @@ class StudentWaiverSerializer(serializers.ModelSerializer):
         return url
 
     def _get_active_invoice(self, obj):
+        # Local import to prevent potential circular import flags
         from .models import StudentFee
         return StudentFee.objects.filter(
             student=obj.student,
@@ -210,7 +260,6 @@ class StudentWaiverSerializer(serializers.ModelSerializer):
         return str(inv.waived_amount) if inv else '0.00'
 
     def get_invoice_net_due(self, obj):
-        from decimal import Decimal
         inv = self._get_active_invoice(obj)
         if not inv:
             return '0.00'
@@ -227,3 +276,75 @@ class StudentWaiverSerializer(serializers.ModelSerializer):
     def get_invoice_balance(self, obj):
         inv = self._get_active_invoice(obj)
         return str(inv.balance) if inv else '0.00'
+
+
+# ==========================================
+# 8. MPESA INITIATE SERIALIZER (Standard Serializer)
+# ==========================================
+class MpesaInitiateSerializer(serializers.Serializer):
+    """
+    Validates and normalizes M-Pesa STK push initiation data.
+
+    SECURITY FIX #9: Phone validation now handles +254 prefix consistently
+    with frontend validatePhone() function.
+
+    SECURITY FIX #14: Supports client-generated idempotency_key for true
+    idempotency across retries.
+    """
+    phone = serializers.CharField(max_length=20, required=True)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=True, min_value=1)
+    student_id = serializers.UUIDField(required=True)
+    fee_id = serializers.UUIDField(required=False, allow_null=True)
+    idempotency_key = serializers.CharField(max_length=100, required=False, allow_blank=True)
+
+    def validate_phone(self, value):
+        """
+        Normalize phone to 2547XXXXXXXX.
+        Handles: 07XX XXX XXX, 7XX XXX XXX, 2547XX XXX XXX, +2547XX XXX XXX
+        """
+        if not value:
+            raise serializers.ValidationError("Phone number is required.")
+
+        # Remove all non-digits, including + prefix
+        digits = re.sub(r'\D', '', str(value))
+
+        # Handle +254 prefix (already stripped by regex, but double-check)
+        if digits.startswith('254') and len(digits) == 12:
+            pass  # Already correct format
+        elif digits.startswith('0') and len(digits) == 10:
+            digits = '254' + digits[1:]
+        elif digits.startswith('7') and len(digits) == 9:
+            digits = '254' + digits
+        elif digits.startswith('254') and len(digits) == 13:
+            # Edge case: someone typed 2540... treat as 0-prefixed
+            digits = '254' + digits[3:]
+        else:
+            raise serializers.ValidationError(
+                "Invalid Kenyan phone number. Use format 07XX XXX XXX, 2547XX XXX XXX, or +2547XX XXX XXX."
+            )
+
+        # Validate Safaricom prefix (7xx, 1xx for new prefixes)
+        if not re.match(r'^254[71]\d{8}$', digits):
+            raise serializers.ValidationError("Invalid Kenyan mobile number format.")
+
+        return digits
+
+    def validate_amount(self, value):
+        if value < 1:
+            raise serializers.ValidationError("Amount must be at least 1 KES.")
+        if value > 150000:
+            raise serializers.ValidationError("Amount exceeds M-Pesa limit of 150,000 KES.")
+        return value
+
+    def validate_idempotency_key(self, value):
+        """Sanitize idempotency key to prevent injection."""
+        if value:
+            # Strip whitespace and limit length
+            value = value.strip()[:100]
+            # Only allow alphanumeric, hyphens, underscores
+            if not re.match(r'^[a-zA-Z0-9_-]+$', value):
+                raise serializers.ValidationError(
+                    "Idempotency key must contain only letters, numbers, hyphens, and underscores."
+                )
+        return value
+    
