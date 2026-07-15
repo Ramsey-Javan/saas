@@ -35,7 +35,7 @@ class STKPushSerializer(serializers.Serializer):
         allow_null=True,
     )
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('1.00'))
-    phone = serializers.RegexField(regex=r'^(?:254|\+254|0)?[17]\d{8}$')
+    phone = serializers.RegexField(regex=r'^(?:254|\+254|0)?[17]\d{8}$')  # Supports 07xx and 01xx
     account_ref = serializers.CharField(required=False, allow_blank=True, max_length=50)
     description = serializers.CharField(required=False, allow_blank=True, max_length=100)
 
@@ -203,22 +203,41 @@ def _recalculate_invoice(invoice):
 
 
 def _create_receipt_for_payment(payment):
+    """
+    Create a receipt for a confirmed payment.
+    Idempotent: returns existing receipt if one already exists.
+    Handles race conditions and duplicate receipt numbers gracefully.
+    """
+    # Check if receipt already exists (idempotency)
     try:
         return payment.receipt
-    except Receipt.DoesNotExist:
+    except (Receipt.DoesNotExist, AttributeError):
         pass
 
     fee = payment.student_fee
-    return Receipt.objects.create(
-        tenant=payment.tenant,
-        student=payment.student,
-        payment=payment,
-        amount=payment.amount,
-        payment_method=payment.payment_method,
-        term=fee.fee_structure.term if fee else '',
-        academic_year=fee.fee_structure.academic_year if fee else '',
-        issued_by=payment.recorded_by,
-    )
+
+    # Defensive: handle potential IntegrityError from duplicate receipt numbers
+    # The Receipt.save() method has its own retry logic, but we add protection here too
+    try:
+        return Receipt.objects.create(
+            tenant=payment.tenant,
+            student=payment.student,
+            payment=payment,
+            amount=payment.amount,
+            payment_method=payment.payment_method,
+            term=fee.fee_structure.term if fee else '',
+            academic_year=fee.fee_structure.academic_year if fee else '',
+            issued_by=payment.recorded_by,
+        )
+    except IntegrityError:
+        # Race condition: another process created the receipt between our check and create
+        # OR duplicate receipt number was generated. Try to fetch the existing receipt.
+        try:
+            return Receipt.objects.get(payment=payment)
+        except Receipt.DoesNotExist:
+            # If no receipt exists for this payment, the error was from duplicate receipt_number
+            # Let it propagate — the Receipt.save() retry logic should handle this
+            raise
 
 
 def _send_payment_sms(student, amount, receipt_number, remaining_balance):

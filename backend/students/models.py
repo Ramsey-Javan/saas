@@ -119,6 +119,7 @@ class Guardian(models.Model):
         blank=True,
         related_name='guardian_profile',
     )
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=True, blank=True)
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150)
     phone = models.CharField(max_length=15)

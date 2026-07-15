@@ -48,21 +48,28 @@ export default function StaffListPage() {
   const [message, setMessage] = useState(location.state?.message || '')
   const [filters, setFilters] = useState({ department: 'all', employment_status: '', job_title: '' })
   const [deactivateTarget, setDeactivateTarget] = useState(null)
+  const [page, setPage] = useState(1)
+  const [count, setCount] = useState(0)
+  const PAGE_SIZE = 25
   // Maps CustomUser id -> array of classroom labels they're homeroom for.
   const [classTeacherMap, setClassTeacherMap] = useState({})
 
   const load = () => {
     setLoading(true)
-    const params = {}
+    const params = { page, page_size: PAGE_SIZE }
     if (filters.department !== 'all') params.department = filters.department
     if (filters.employment_status) params.employment_status = filters.employment_status
     if (filters.job_title) params.job_title = filters.job_title
     staffApi.getStaff(params)
-      .then(({ data }) => setStaff(data.results || data))
+      .then(({ data }) => {
+        const list = listFromResponse(data)
+        setStaff(list)
+        setCount(data.count || list.length)
+      })
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [filters])
+  useEffect(() => { load() }, [filters, page])
 
   // Build the class-teacher lookup once classrooms are known. We only
   // need this when teachers are visible in the current filter, but it's
@@ -83,10 +90,13 @@ export default function StaffListPage() {
     }).catch(() => setClassTeacherMap({}))
   }, [])
 
+  const totalPages = Math.ceil(count / PAGE_SIZE)
+
   return (
     <div>
       <PageHeader
         title="Staff Management"
+        description={`${count} staff member${count !== 1 ? 's' : ''}`}
         action={<Link to="/staff/new"><Button><Plus size={16} className="mr-2" />Add Staff Member</Button></Link>}
       />
       {message && (
@@ -99,7 +109,7 @@ export default function StaffListPage() {
           <button
             key={department}
             type="button"
-            onClick={() => setFilters((f) => ({ ...f, department }))}
+            onClick={() => { setFilters((f) => ({ ...f, department })); setPage(1) }}
             className={`rounded-lg px-4 py-2 text-sm font-medium capitalize ${filters.department === department ? 'bg-[var(--brand-primary)] text-white' : 'bg-white border border-gray-200 text-gray-600'}`}
           >
             {department}
@@ -107,7 +117,7 @@ export default function StaffListPage() {
         ))}
         <select
           value={filters.job_title}
-          onChange={(event) => setFilters((f) => ({ ...f, job_title: event.target.value }))}
+          onChange={(event) => { setFilters((f) => ({ ...f, job_title: event.target.value })); setPage(1) }}
           className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
         >
           <option value="">Any job title</option>
@@ -117,7 +127,7 @@ export default function StaffListPage() {
         </select>
         <select
           value={filters.employment_status}
-          onChange={(event) => setFilters((f) => ({ ...f, employment_status: event.target.value }))}
+          onChange={(event) => { setFilters((f) => ({ ...f, employment_status: event.target.value })); setPage(1) }}
           className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
         >
           <option value="">Any status</option>
@@ -133,60 +143,91 @@ export default function StaffListPage() {
         ) : staff.length === 0 ? (
           <EmptyState icon={Users} title="No staff found" description="Add teaching and non-teaching staff for this school." />
         ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left text-xs uppercase text-gray-500">
-              <tr>
-                <th className="px-4 py-3">Photo</th>
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Employee No.</th>
-                <th className="px-4 py-3">Job Title</th>
-                <th className="px-4 py-3">Class Teacher</th>
-                <th className="px-4 py-3">Phone</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Login</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {staff.map((item) => {
-                const homerooms = item.user ? classTeacherMap[String(item.user)] : null
-                return (
-                  <tr key={item.id}>
-                    <td className="px-4 py-3"><StaffAvatar staff={item} /></td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{item.full_name}</td>
-                    <td className="px-4 py-3 text-gray-600">{item.employee_number}</td>
-                    <td className="px-4 py-3 capitalize text-gray-600">{item.job_title.replace('_', ' ')}</td>
-                    <td className="px-4 py-3">
-                      {item.job_title !== 'teacher' ? (
-                        <span className="text-gray-400">—</span>
-                      ) : homerooms?.length ? (
-                        <div className="flex flex-wrap gap-1">
-                          {homerooms.map((label) => (
-                            <Badge key={label} label={label} variant="active" />
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">{item.phone}</td>
-                    <td className="px-4 py-3">
-                      <Badge label={item.employment_status.replace('_', ' ')} variant={statusVariant(item.employment_status)} />
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">{item.has_login ? 'Yes' : 'No'}</td>
-                    <td className="px-4 py-3 text-right space-x-3">
-                      <Link className="text-[var(--brand-primary)] hover:underline" to={`/staff/${item.id}`}>View</Link>
-                      {item.employment_status !== 'terminated' && (
-                        <button type="button" className="text-red-600 hover:underline" onClick={() => setDeactivateTarget(item)}>
-                          Deactivate
-                        </button>
-                      )}
-                    </td>
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[900px]">
+                <thead className="bg-gray-50 text-left text-xs uppercase text-gray-500">
+                  <tr>
+                    <th className="px-4 py-3">Photo</th>
+                    <th className="px-4 py-3">Name</th>
+                    <th className="px-4 py-3">Employee No.</th>
+                    <th className="px-4 py-3">Job Title</th>
+                    <th className="px-4 py-3">Class Teacher</th>
+                    <th className="px-4 py-3">Phone</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Login</th>
+                    <th className="px-4 py-3"></th>
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {staff.map((item) => {
+                    const homerooms = item.user ? classTeacherMap[String(item.user)] : null
+                    return (
+                      <tr key={item.id}>
+                        <td className="px-4 py-3"><StaffAvatar staff={item} /></td>
+                        <td className="px-4 py-3 font-medium text-gray-900">{item.full_name}</td>
+                        <td className="px-4 py-3 text-gray-600">{item.employee_number}</td>
+                        <td className="px-4 py-3 capitalize text-gray-600">{item.job_title.replace('_', ' ')}</td>
+                        <td className="px-4 py-3">
+                          {item.job_title !== 'teacher' ? (
+                            <span className="text-gray-400">—</span>
+                          ) : homerooms?.length ? (
+                            <div className="flex flex-wrap gap-1">
+                              {homerooms.map((label) => (
+                                <Badge key={label} label={label} variant="active" />
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-gray-600">{item.phone}</td>
+                        <td className="px-4 py-3">
+                          <Badge label={item.employment_status.replace('_', ' ')} variant={statusVariant(item.employment_status)} />
+                        </td>
+                        <td className="px-4 py-3 text-gray-600">{item.has_login ? 'Yes' : 'No'}</td>
+                        <td className="px-4 py-3 text-right space-x-3">
+                          <Link className="text-[var(--brand-primary)] hover:underline" to={`/staff/${item.id}`}>View</Link>
+                          {item.employment_status !== 'terminated' && (
+                            <button type="button" className="text-red-600 hover:underline" onClick={() => setDeactivateTarget(item)}>
+                              Deactivate
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100">
+                <p className="text-sm text-gray-500">
+                  Page {page} of {totalPages} · {count} staff
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setPage(p => p - 1)}
+                    disabled={page <= 1}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setPage(p => p + 1)}
+                    disabled={page >= totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </Card>
       {deactivateTarget && (

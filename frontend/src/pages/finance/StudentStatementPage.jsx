@@ -32,12 +32,33 @@ export default function StudentStatementPage() {
   const [downloadStatus, setDownloadStatus] = useState('')
   const [smsStatus, setSmsStatus] = useState('')
 
+  // Initial load
   useEffect(() => {
     setLoading(true)
     financeApi.getStudentStatement(studentId).then(res => {
       setStatement(res.data)
       setLoading(false)
     })
+  }, [studentId])
+
+  // Listen for M-Pesa payment success events from MpesaPaymentModal
+  // so the statement auto-refreshes without a page reload.
+  useEffect(() => {
+    const handleMpesaSuccess = (event) => {
+      const evtStudentId = event?.detail?.studentId || event?.detail?.student_id
+      const currentId = String(studentId)
+      console.log('[Statement] Received mpesa event:', { evtStudentId, currentId, match: evtStudentId === currentId })
+      if (evtStudentId === currentId) {
+        console.log('[Statement] M-Pesa payment detected, refetching...')
+        financeApi.getStudentStatement(studentId).then(res => {
+          setStatement(res.data)
+        }).catch(err => {
+          console.error('[Statement] Refetch failed:', err)
+        })
+      }
+    }
+    window.addEventListener('mpesa-payment-success', handleMpesaSuccess)
+    return () => window.removeEventListener('mpesa-payment-success', handleMpesaSuccess)
   }, [studentId])
 
 
@@ -275,8 +296,14 @@ export default function StudentStatementPage() {
         } : null}
         fee={payInvoice}
         onSuccess={() => {
-          setPayInvoice(null)
-          financeApi.getStudentStatement(studentId).then(res => setStatement(res.data))
+          // Refetch statement data BEFORE closing modal so user sees updated data
+          // even if they had navigated to the statement page in the background.
+          financeApi.getStudentStatement(studentId).then(res => {
+            setStatement(res.data)
+            setPayInvoice(null)
+          }).catch(() => {
+            setPayInvoice(null)
+          })
         }}
       />
     </div>

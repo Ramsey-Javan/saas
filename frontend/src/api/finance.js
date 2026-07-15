@@ -100,6 +100,8 @@ export const financeApi = {
   getWaiversByPolicy: (policyId) => api.get('/finance/waivers/by_policy/', { params: { policy_id: policyId } }),
   getWaiverReport: () => api.get('/finance/waivers/report/'),
   
-  initiateMpesa: (data) => api.post('/finance/mpesa/stk_push/', data),
-  getPaymentStatus: (id) => api.get(`/finance/mpesa/${id}/status/`),
+  // M-Pesa — unwrap .data since api client returns full axios response
+  // SECURITY FIX #14: Now accepts idempotency_key in data
+  initiateMpesa: (data) => api.post('/finance/mpesa/stk_push/', data).then(r => r.data),
+  getPaymentStatus: (id) => api.get(`/finance/mpesa/${id}/status/`).then(r => r.data),
 }

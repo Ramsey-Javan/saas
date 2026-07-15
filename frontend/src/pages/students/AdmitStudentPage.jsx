@@ -208,7 +208,7 @@ export default function AdmitStudentPage() {
             <Select label="Class *" {...register('classroom')} error={errors.classroom?.message}>
               <option value="">Select class...</option>
               {classrooms.map(c => (
-                <option key={c.id} value={c.id}>{c.name} ({c.academic_year})</option>
+                <option key={c.id} value={c.id}>{c.name}{c.stream ? ` ${c.stream}` : ''} ({c.academic_year})</option>
               ))}
             </Select>
             <Input label="First Name *" placeholder="e.g. Amani"

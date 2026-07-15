@@ -26,9 +26,10 @@ const STATUS_FILTERS = [
   { value: 'all', label: 'All Statuses' },
 ]
 
-const classroomLabel = (classroom) => (
-  `${classroom.name}${classroom.stream ? ` ${classroom.stream}` : ''} (${classroom.academic_year})`
-)
+const classroomLabel = (classroom) => {
+  if (!classroom) return '—'
+  return `${classroom.name}${classroom.stream ? ` ${classroom.stream}` : ''} (${classroom.academic_year})`
+}
 
 export default function StudentsPage() {
   const navigate = useNavigate()
@@ -109,6 +110,19 @@ export default function StudentsPage() {
   const activeClassroomLabel = filters.classroom
     ? classrooms.find(c => String(c.id) === String(filters.classroom))
     : null
+
+  // Helper to render classroom display with stream
+  const renderClassroom = (student) => {
+    // New API: classroom is a nested object { id, name, stream, academic_year }
+    if (student.classroom && typeof student.classroom === 'object') {
+      return classroomLabel(student.classroom)
+    }
+    // Old API fallback: flat string from classroom_name
+    if (student.classroom_name) {
+      return student.classroom_name
+    }
+    return '—'
+  }
 
   return (
     <div>
@@ -219,7 +233,7 @@ export default function StudentsPage() {
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm min-w-[800px]">
                 <thead>
                   <tr className="border-b border-gray-100">
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Student</th>
@@ -248,7 +262,7 @@ export default function StudentsPage() {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-gray-600 font-mono text-xs">{student.admission_number}</td>
-                      <td className="px-4 py-3 text-gray-700">{student.classroom_name || '—'}</td>
+                      <td className="px-4 py-3 text-gray-700">{renderClassroom(student)}</td>
                       <td className="px-4 py-3">
                         <Badge
                           label={student.gender === 'M' ? 'Male' : 'Female'}

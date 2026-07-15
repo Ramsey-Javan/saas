@@ -293,7 +293,7 @@ export default function AppShell({ children }) {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 lg:p-6">
           <ErrorBoundary>
             {children}
           </ErrorBoundary>
