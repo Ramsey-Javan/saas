@@ -39,7 +39,8 @@ export const studentsApi = {
   // Guardians
   getGuardians: (params) => api.get('/students/guardians/', { params }),
   createGuardian: (data) => api.post('/students/guardians/', data),
-
+  updateGuardian: (id, data) => api.patch(`/students/guardians/${id}/`, data), 
+  
   // Search & Transfer
   searchStudents: (query) => api.get('/students/search/', { params: { q: query } }),
   transferStudent: (id, classroomId) => api.post(`/students/${id}/transfer/`, { classroom: classroomId }),

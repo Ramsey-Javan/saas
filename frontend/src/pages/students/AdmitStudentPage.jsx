@@ -29,8 +29,16 @@ const guardianFields = {
   guardian_national_id: z.string().optional(),
 }
 
+const guardianFieldsOptional = {
+  guardian_first_name: z.string().optional(),
+  guardian_last_name: z.string().optional(),
+  guardian_phone: z.string().optional(),
+  guardian_relationship: z.string().optional(),
+  guardian_national_id: z.string().optional(),
+}
+
 const createSchema = z.object({ ...studentFields, ...guardianFields })
-const editSchema = z.object(studentFields)
+const editSchema = z.object({ ...studentFields, ...guardianFieldsOptional })
 const listFromResponse = (data) => data?.results || (Array.isArray(data) ? data : [])
 
 export default function AdmitStudentPage() {
@@ -63,6 +71,8 @@ export default function AdmitStudentPage() {
         const { data: student } = await studentsApi.getStudent(id)
         setPhotoPreview(student.photo || null)
 
+        const g = student.primary_guardian_data || {}
+
         reset({
           admission_number: student.admission_number || '',
           first_name: student.first_name || '',
@@ -75,6 +85,11 @@ export default function AdmitStudentPage() {
           birth_certificate_no: student.birth_certificate_no || '',
           blood_group: student.blood_group || '',
           medical_notes: student.medical_notes || '',
+          guardian_first_name: g.first_name || '',
+          guardian_last_name: g.last_name || '',
+          guardian_phone: g.phone || '',
+          guardian_relationship: g.relationship || '',
+          guardian_national_id: g.national_id || '',
         })
       } catch (err) {
         console.error('Failed to load student:', err)
@@ -134,7 +149,43 @@ export default function AdmitStudentPage() {
 
     try {
       if (isEditMode) {
-        await studentsApi.updateStudent(id, buildStudentFormData(values))
+        const payload = {
+          admission_number: values.admission_number,
+          first_name: values.first_name,
+          middle_name: values.middle_name || '',
+          last_name: values.last_name,
+          gender: values.gender,
+          date_of_birth: values.date_of_birth,
+          classroom: values.classroom,
+          nemis_no: values.nemis_no || '',
+          birth_certificate_no: values.birth_certificate_no || '',
+          blood_group: values.blood_group || '',
+          medical_notes: values.medical_notes || '',
+        }
+
+        const hasGuardianData =
+          values.guardian_first_name?.trim() ||
+          values.guardian_last_name?.trim() ||
+          values.guardian_phone?.trim()
+
+        if (hasGuardianData) {
+          payload.guardian = {
+            first_name: values.guardian_first_name,
+            last_name: values.guardian_last_name,
+            phone: values.guardian_phone,
+            relationship: values.guardian_relationship,
+            national_id: values.guardian_national_id || '',
+          }
+        }
+
+        await studentsApi.updateStudent(id, payload)
+
+        if (photoFile) {
+          const fd = new FormData()
+          fd.append('photo', photoFile)
+          await studentsApi.updateStudent(id, fd)
+        }
+
         navigate(`/students/${id}`)
         return
       }
@@ -154,6 +205,7 @@ export default function AdmitStudentPage() {
       const data = err.response?.data
       const msg = data?.admission_number?.[0] ||
         data?.detail ||
+        data?.guardian?.detail ||
         Object.values(data || {})[0]?.[0] ||
         'Failed to save student. Please try again.'
       setSubmitError(msg)
@@ -287,29 +339,31 @@ export default function AdmitStudentPage() {
           </div>
         </Card>
 
-        {!isEditMode && (
-          <Card className="p-5">
-            <h2 className="text-sm font-semibold text-gray-900 mb-4">Primary Guardian / Parent</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="First Name *" placeholder="e.g. John"
-                {...register('guardian_first_name')} error={errors.guardian_first_name?.message} />
-              <Input label="Last Name *" placeholder="e.g. Kamau"
-                {...register('guardian_last_name')} error={errors.guardian_last_name?.message} />
-              <Input label="Phone Number *" placeholder="0722 000 000"
-                {...register('guardian_phone')} error={errors.guardian_phone?.message} />
-              <Select label="Relationship *" {...register('guardian_relationship')} error={errors.guardian_relationship?.message}>
-                <option value="">Select...</option>
-                <option value="father">Father</option>
-                <option value="mother">Mother</option>
-                <option value="guardian">Guardian</option>
-                <option value="sibling">Sibling</option>
-                <option value="other">Other</option>
-              </Select>
-              <Input label="National ID" placeholder="Optional"
-                {...register('guardian_national_id')} />
-            </div>
-          </Card>
-        )}
+        <Card className="p-5">
+          <h2 className="text-sm font-semibold text-gray-900 mb-4">
+            {isEditMode ? 'Parent / Guardian Information' : 'Primary Guardian / Parent'}
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input label="First Name *" placeholder="e.g. John"
+              {...register('guardian_first_name')} error={errors.guardian_first_name?.message} />
+            <Input label="Last Name *" placeholder="e.g. Kamau"
+              {...register('guardian_last_name')} error={errors.guardian_last_name?.message} />
+            <Input label="Phone Number *" placeholder="0722 000 000"
+              {...register('guardian_phone')} error={errors.guardian_phone?.message} />
+            <Select label="Relationship *" {...register('guardian_relationship')} error={errors.guardian_relationship?.message}>
+              <option value="">Select...</option>
+              <option value="father">Father</option>
+              <option value="mother">Mother</option>
+              <option value="guardian">Guardian</option>
+              <option value="uncle">Uncle</option>
+              <option value="aunt">Aunt</option>
+              <option value="grandparent">Grandparent</option>
+              <option value="other">Other</option>
+            </Select>
+            <Input label="National ID" placeholder="Optional"
+              {...register('guardian_national_id')} />
+          </div>
+        </Card>
 
         <div className="flex gap-3 justify-end pb-6">
           <Button type="button" variant="secondary" onClick={() => navigate(isEditMode ? `/students/${id}` : '/students')}>
