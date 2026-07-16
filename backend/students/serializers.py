@@ -66,6 +66,7 @@ class StudentDetailSerializer(serializers.ModelSerializer):
     age = serializers.ReadOnlyField()
     primary_guardian_data = GuardianSerializer(source='primary_guardian', read_only=True)
     classroom_data = ClassroomSerializer(source='classroom', read_only=True)
+    guardian = serializers.DictField(write_only=True, required=False)
 
     class Meta:
         model = Student
@@ -77,7 +78,7 @@ class StudentDetailSerializer(serializers.ModelSerializer):
             'admission_date', 'status', 'is_active',
             'primary_guardian', 'primary_guardian_data',
             'blood_group', 'medical_notes', 'special_needs',
-            'created_at', 'updated_at',
+            'created_at', 'updated_at', 'guardian',
         ]
         read_only_fields = [
             'created_at',
@@ -101,3 +102,35 @@ class StudentDetailSerializer(serializers.ModelSerializer):
         if qs.exists():
             raise serializers.ValidationError('This admission number is already in use.')
         return value
+
+    def validate_guardian(self, value):
+        if not value:
+            return value
+        required = ['first_name', 'last_name', 'phone', 'relationship']
+        missing = [f for f in required if not value.get(f)]
+        if missing:
+            raise serializers.ValidationError(
+                {f: 'This field is required.' for f in missing}
+            )
+        return value
+
+    def update(self, instance, validated_data):
+        guardian_data = validated_data.pop('guardian', None)
+        student = super().update(instance, validated_data)
+
+        if guardian_data:
+            if student.primary_guardian:
+                g = student.primary_guardian
+                for attr, val in guardian_data.items():
+                    if val is not None:
+                        setattr(g, attr, val)
+                g.save()
+            else:
+                g = Guardian.objects.create(
+                    tenant=student.tenant,
+                    **guardian_data
+                )
+                student.primary_guardian = g
+                student.save(update_fields=['primary_guardian'])
+
+        return student
