@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/authStore'
 import { Button, Card, Input, PageHeader, Select, Spinner } from '@/components/ui'
 import { EmptyTableRow, Modal, TERMS, classroomLabel, listFromResponse, thisYear, todayISO } from './shared'
 
-function CreateSessionModal({ classrooms, subjects, onClose }) {
+function CreateSessionModal({ classrooms = [], subjects = [], onClose }) {
   const navigate = useNavigate()
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -102,7 +102,7 @@ function CreateSessionModal({ classrooms, subjects, onClose }) {
   )
 }
 
-function SessionsTable({ sessions, onLock }) {
+function SessionsTable({ sessions, onLock, onUnlock }) {
   const navigate = useNavigate()
   const isAdmin = useAuthStore(state => state.hasRole('admin', 'superadmin'))
   
@@ -111,14 +111,14 @@ function SessionsTable({ sessions, onLock }) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-gray-100">
-            {['Class', 'Type', 'Date', 'Present', 'Absent', 'Total', 'Locked', 'Actions'].map(h => (
+            {['Class', 'Type', 'Date', 'Present', 'Absent', 'Total', 'Locked', 'Auto-Marked', 'Actions'].map(h => (
               <th key={h} className="px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">{h}</th>
             ))}
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-50">
           {sessions.length === 0 ? (
-            <EmptyTableRow colSpan={8} message="No sessions found." />
+            <EmptyTableRow colSpan={9} message="No sessions found." />
           ) : (
             sessions.map(s => (
               <tr key={s.id}>
@@ -130,12 +130,27 @@ function SessionsTable({ sessions, onLock }) {
                 <td className="px-4 py-3 text-gray-600">{s.total_students || 0}</td>
                 <td className="px-4 py-3">{s.is_locked ? 'Yes' : 'No'}</td>
                 <td className="px-4 py-3">
+                  {s.auto_marked ? (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                      Auto-Marked
+                    </span>
+                  ) : (
+                    <span className="text-gray-400 text-xs">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
                   <div className="flex gap-2">
                     <Button size="sm" onClick={() => navigate(`/academics/attendance/mark?session=${s.id}`)}>
                       {s.is_locked ? 'View' : 'Mark'}
                     </Button>
-                    {isAdmin && !s.is_locked && (
-                      <Button size="sm" variant="secondary" onClick={() => onLock(s.id)}>Lock</Button>
+                    {isAdmin && (
+                      <Button 
+                        size="sm" 
+                        variant={s.is_locked ? "primary" : "secondary"} 
+                        onClick={() => s.is_locked ? onUnlock(s.id) : onLock(s.id)}
+                      >
+                        {s.is_locked ? 'Unlock' : 'Lock'}
+                      </Button>
                     )}
                   </div>
                 </td>
@@ -164,7 +179,7 @@ export default function AttendanceDashboard() {
   const [studentSummary, setStudentSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
-  const [exporting, setExporting] = useState(false)   // ← NEW
+  const [exporting, setExporting] = useState(false)
 
   const fetchSessions = useCallback(async () => {
     setLoading(true)
@@ -230,6 +245,11 @@ export default function AttendanceDashboard() {
     fetchSessions()
   }
 
+  const unlock = async (id) => {
+    await academicsApi.unlockSession(id)
+    fetchSessions()
+  }
+
   const handleExport = async () => {
     setExporting(true)
     try {
@@ -242,7 +262,6 @@ export default function AttendanceDashboard() {
       }
       const response = await academicsApi.exportAttendance(params)
       
-      // Trigger ZIP file download
       const blob = new Blob([response.data], { type: 'application/zip' })
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -268,7 +287,7 @@ export default function AttendanceDashboard() {
         description={studentFilter ? `Filtered for student ${studentFilter}` : ''} 
         action={
           <div className="flex gap-2">
-            {isAdmin && tab === 'history' && (   // ← NEW: Export button
+            {isAdmin && tab === 'history' && (
               <Button 
                 variant="secondary" 
                 onClick={handleExport} 
@@ -321,7 +340,6 @@ export default function AttendanceDashboard() {
           </Select>
           <Input label="Academic Year" type="number" value={filters.academic_year} onChange={e => setFilters(f => ({ ...f, academic_year: e.target.value }))} />
           
-          {/* ← NEW: Date range filters for export */}
           <Input label="Date From" type="date" value={filters.date_after} onChange={e => setFilters(f => ({ ...f, date_after: e.target.value }))} />
           <Input label="Date To" type="date" value={filters.date_before} onChange={e => setFilters(f => ({ ...f, date_before: e.target.value }))} />
         </Card>
@@ -335,7 +353,7 @@ export default function AttendanceDashboard() {
             <Spinner className="h-7 w-7" />
           </div>
         ) : (
-          <SessionsTable sessions={visibleSessions} onLock={lock} />
+          <SessionsTable sessions={visibleSessions} onLock={lock} onUnlock={unlock} />
         )}
       </Card>
       

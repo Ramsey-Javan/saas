@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Lock } from 'lucide-react'
+import { Lock, AlertTriangle } from 'lucide-react'
 import { academicsApi } from '@/api/academics'
 import { studentsApi } from '@/api/students'
 import { useAuthStore } from '@/store/authStore'
@@ -25,17 +25,6 @@ export default function MarkAttendancePage() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
 
-  // Mirrors the backend's _check_attendance_permission in
-  // academics/views/school_life.py:
-  // - Register sessions (daily/morning/afternoon): homeroom teacher only.
-  // - Lesson sessions: any teacher with a subject assignment in this
-  //   classroom may also act, in addition to the homeroom teacher.
-  // session.class_teacher_id and session.is_my_subject_class are expected
-  // on the session payload (AttendanceSessionSerializer) — is_my_subject_class
-  // should reflect whether the current teacher has a ClassSubjectAssignment
-  // for this session's classroom. If that field isn't present yet, this
-  // falls back to homeroom-only, which is the safe default (matches what
-  // the backend will reject anyway, just without a friendly pre-check).
   const isRegisterSession = session ? REGISTER_SESSION_TYPES.has(session.session_type) : true
   const isHomeroomTeacher = session?.class_teacher_id === user?.id
   const isSubjectTeacherHere = Boolean(session?.is_my_subject_class)
@@ -113,6 +102,13 @@ export default function MarkAttendancePage() {
     setSession(data)
   }
 
+  const unlock = async () => {
+    if (!isAdmin) return
+    await academicsApi.unlockSession(sessionId)
+    const { data } = await academicsApi.getSession(sessionId)
+    setSession(data)
+  }
+
   if (loading) return <div className="flex justify-center py-20"><Spinner className="h-7 w-7" /></div>
   if (!session) return <Card className="p-6 text-sm text-gray-500">Session not found.</Card>
 
@@ -135,6 +131,18 @@ export default function MarkAttendancePage() {
         }
       />
 
+      {session.auto_marked && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+            <div>
+              <p className="font-semibold">This session was auto-marked</p>
+              <p className="mt-0.5">All students were marked Present because attendance was not marked by end of day. Please review and update as needed.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {!canManageThisSession && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {isRegisterSession
@@ -145,7 +153,13 @@ export default function MarkAttendancePage() {
 
       {session.is_locked && (
         <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
-          This session is locked. Attendance is read-only.
+          <p className="font-semibold">This session is locked.</p>
+          <p>Attendance is read-only. Contact an administrator if you need to make changes.</p>
+          {isAdmin && (
+            <Button size="sm" variant="primary" onClick={unlock} className="mt-2">
+              Unlock Session
+            </Button>
+          )}
         </div>
       )}
       {message && <div className="rounded-lg bg-[var(--brand-primary-light)] px-4 py-3 text-sm text-[var(--brand-primary)]">{message}</div>}
