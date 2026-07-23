@@ -120,4 +120,8 @@ export const academicsApi = {
     responseType: 'blob',
   }),
   getStudentReportCards: (studentId) => api.get(`/academics/report-cards/student/${studentId}/`),
+  exportAttendance: (params) => api.get('/academics/sessions/export/', { 
+    params,
+    responseType: 'arraybuffer',  
+  }),
 }

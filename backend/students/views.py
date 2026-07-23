@@ -68,11 +68,16 @@ class ClassroomListCreateView(generics.ListCreateAPIView):
         if self.request.method == 'POST':
             return [IsSchoolAdmin()]
         return [IsAuthenticated()]
-
+    
     def get_queryset(self):
         qs = Classroom.objects.select_related('class_teacher')
         if getattr(self.request.user, 'tenant_id', None):
             qs = qs.filter(tenant=self.request.user.tenant)
+        
+        mine = self.request.query_params.get('mine')
+        if mine and mine.lower() == 'true' and getattr(self.request.user, 'role', None) == 'teacher':
+            qs = qs.filter(id__in=_teacher_accessible_classroom_ids(self.request.user))
+        
         year = self.request.query_params.get('year')
         grade = self.request.query_params.get('grade')
         class_teacher_id = self.request.query_params.get('class_teacher')

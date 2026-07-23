@@ -74,7 +74,7 @@ class AttendanceSessionSerializer(serializers.ModelSerializer):
 
 class AttendanceSessionListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for attendance session lists."""
-    classroom_name = serializers.CharField(source='classroom.name', read_only=True)
+    classroom_name = serializers.SerializerMethodField()   # ← CHANGED
     class_teacher_id = serializers.IntegerField(source='classroom.class_teacher_id', read_only=True)
     teacher_name = serializers.SerializerMethodField()
     subject_name = serializers.SerializerMethodField()
@@ -94,6 +94,10 @@ class AttendanceSessionListSerializer(serializers.ModelSerializer):
             'is_locked',
             'present_count', 'absent_count', 'total_students',
         ]
+
+    def get_classroom_name(self, obj):          
+        return str(obj.classroom) if obj.classroom else ''
+
 
     def get_teacher_name(self, obj):
         return obj.teacher.get_full_name() if obj.teacher else ""
