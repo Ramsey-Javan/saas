@@ -41,6 +41,13 @@ class Tenant(models.Model):
     )
     plan = models.CharField(max_length=20, choices=Plan.choices, default=Plan.TRIAL)
     trial_ends_on = models.DateField(null=True, blank=True)
+    
+    # Attendance Configuration
+    attendance_auto_lock_days = models.PositiveIntegerField(
+        default=2,
+        help_text='Number of days after which attendance sessions are auto-locked. 0 = disabled.'
+    )
+    
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -88,3 +95,4 @@ class Domain(models.Model):
 
     def __str__(self):
         return self.domain_name
+    

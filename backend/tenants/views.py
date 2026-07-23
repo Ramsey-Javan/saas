@@ -83,6 +83,27 @@ class TenantViewSet(viewsets.ModelViewSet):
     queryset = Tenant.objects.all()
     serializer_class = TenantSerializer
 
+    @action(detail=False, methods=['patch'], url_path='attendance-settings')
+    def attendance_settings(self, request):
+        """PATCH /api/tenants/attendance-settings/"""
+        tenant = request.user.tenant
+        days = request.data.get('attendance_auto_lock_days')
+        if days is not None:
+            try:
+                days = int(days)
+                if days < 0:
+                    raise ValueError
+                tenant.attendance_auto_lock_days = days
+                tenant.save(update_fields=['attendance_auto_lock_days'])
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'attendance_auto_lock_days must be a non-negative integer.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        return Response({
+            'attendance_auto_lock_days': tenant.attendance_auto_lock_days,
+        })
+
 
 class PlatformSchoolViewSet(viewsets.ModelViewSet):
     queryset = Tenant.objects.all()

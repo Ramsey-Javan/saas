@@ -4,7 +4,6 @@ import Button from '@/components/ui/Button'
 import Card from '@/components/ui/Card'
 import Input from '@/components/ui/Input'
 import PageHeader from '@/components/ui/PageHeader'
-import Select from '@/components/ui/Select'
 import { generateBrandPalette } from '@/lib/colorUtils'
 import { useAuthStore } from '@/store/authStore'
 
@@ -24,6 +23,7 @@ export default function SchoolProfileSettingsPage() {
   const [form, setForm] = useState(null)
   const [logo, setLogo] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [success, setSuccess] = useState(false)   // ← NEW
 
   useEffect(() => {
     staffApi.getSchoolProfile().then(({ data }) => setForm(data))
@@ -40,15 +40,25 @@ export default function SchoolProfileSettingsPage() {
   const submit = async (event) => {
     event.preventDefault()
     setSaving(true)
+    setSuccess(false)   // ← NEW: clear previous success
+    
     const data = new FormData()
     Object.entries(form).forEach(([key, value]) => {
       if (!['logo', 'is_in_grace_period', 'days_until_trial_expiry'].includes(key) && value !== null) data.append(key, value)
     })
     if (logo) data.append('logo', logo)
-    const response = await staffApi.updateSchoolProfile(data)
-    setSchool(response.data)
-    applyPalette(response.data.primary_color, response.data.secondary_color, response.data.accent_color)
-    setSaving(false)
+    
+    try {
+      const response = await staffApi.updateSchoolProfile(data)
+      setSchool(response.data)
+      applyPalette(response.data.primary_color, response.data.secondary_color, response.data.accent_color)
+      setSuccess(true)   // ← NEW: show success
+      setTimeout(() => setSuccess(false), 4000)   // ← NEW: auto-hide after 4s
+    } catch (err) {
+      console.error('Failed to save:', err)
+    } finally {
+      setSaving(false)
+    }
   }
 
   if (!form) return null
@@ -56,6 +66,17 @@ export default function SchoolProfileSettingsPage() {
   return (
     <form onSubmit={submit}>
       <PageHeader title="School Profile & Branding" />
+      
+      {/* Success Banner */}
+      {success && (
+        <div className="mb-5 px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm flex items-center gap-2">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+          Settings saved successfully.
+        </div>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="p-6 space-y-4">
           <Input label="School name" value={form.name || ''} onChange={(e) => set('name', e.target.value)} />
@@ -78,6 +99,30 @@ export default function SchoolProfileSettingsPage() {
           </div>
         </Card>
       </div>
+
+      {/* Attendance Settings Section */}
+      <PageHeader title="Attendance Settings" className="mt-8 mb-4" />
+      <Card className="p-6 max-w-md">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Auto-Lock Grace Period (days)
+            </label>
+            <Input
+              type="number"
+              min={0}
+              max={30}
+              value={form.attendance_auto_lock_days ?? 2}
+              onChange={(e) => set('attendance_auto_lock_days', parseInt(e.target.value) || 0)}
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Number of days after which attendance sessions are automatically locked. 
+              Teachers cannot edit sessions past this grace period. Set to 0 to disable auto-lock.
+            </p>
+          </div>
+        </div>
+      </Card>
+
       <Button className="mt-6" loading={saving}>Save Changes</Button>
     </form>
   )

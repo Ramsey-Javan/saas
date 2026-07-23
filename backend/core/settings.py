@@ -157,6 +157,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'finance.tasks.reconcile_pending_mpesa_transactions',
         'schedule': crontab(minute='*/2'),
     },
+        'auto-lock-attendance-sessions': {
+        'task': 'academics.tasks.auto_lock_old_sessions',
+        'schedule': crontab(hour=2, minute=0),  # 2:00 AM daily
+    },
 }
 
 

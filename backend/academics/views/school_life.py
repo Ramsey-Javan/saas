@@ -1,6 +1,8 @@
 """Attendance, timetable, co-curricular and report card viewsets."""
 import io
 import zipfile
+from datetime import timedelta
+import csv
 
 from django.db import transaction
 from django.http import HttpResponse
@@ -90,18 +92,19 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             return
 
         user = self.request.user
-        is_homeroom = getattr(classroom, 'class_teacher', None) == user
+        is_homeroom = getattr(classroom, 'class_teacher_id', None) == user.id
+        teaches_class = classroom.id in set(_teacher_classroom_ids(user))
 
         if session_type in self.REGISTER_SESSION_TYPES:
-            if not is_homeroom:
+            if not is_homeroom and not teaches_class:
                 raise PermissionDenied(
-                    'Only the class teacher can manage the daily register for this class.'
+                    'Only assigned teachers can manage the daily register for this class.'
                 )
             return
 
         if is_homeroom:
             return
-        if classroom.id not in set(_teacher_classroom_ids(user)):
+        if not teaches_class:
             raise PermissionDenied(
                 'You can only manage lesson attendance for classes you teach.'
             )
@@ -110,29 +113,99 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 'You can only manage lesson attendance for your assigned subjects.'
             )
 
+    def _check_date_constraints(self, date, instance=None):
+        """Validate session dates: no future, no too-old, respect auto-lock."""
+        today = timezone.localdate()
+
+        # 1. No future dates
+        if date > today:
+            raise ValidationError('Cannot create attendance sessions for future dates.')
+
+        # 2. No backdating beyond 7 days
+        if date < today - timedelta(days=7):
+            raise ValidationError('Cannot create attendance sessions older than 7 days.')
+
+        # 3. Auto-lock grace period from tenant settings
+        tenant = self.request.user.tenant
+        auto_lock_days = getattr(tenant, 'attendance_auto_lock_days', 2)
+        if instance and instance.is_locked:
+            raise ValidationError('This session is locked and cannot be edited.')
+        if instance and (today - instance.date).days > auto_lock_days:
+            raise ValidationError(
+                f'This session can no longer be edited (past {auto_lock_days}-day grace period).'
+            )
+
+    def _check_duplicate_session(self, classroom, date, session_type, subject, exclude_id=None):
+        """Prevent duplicate sessions for same class/date/type/subject."""
+        qs = AttendanceSession.objects.filter(
+            tenant=self.request.user.tenant,
+            classroom=classroom,
+            date=date,
+            session_type=session_type,
+            subject=subject,
+        )
+        if exclude_id:
+            qs = qs.exclude(id=exclude_id)
+        if qs.exists():
+            subject_label = f' ({subject.name})' if subject else ''
+            raise ValidationError(
+                f'A {session_type} session already exists for {classroom}{subject_label} on {date}.'
+            )
+
+    def _auto_populate_records(self, session):
+        """Create present records for all active students in the class."""
+        students = Student.objects.filter(
+            tenant=session.tenant,
+            classroom=session.classroom,
+            is_active=True,
+        )
+        existing_student_ids = set(
+            session.records.values_list('student_id', flat=True)
+        )
+        new_students = students.exclude(id__in=existing_student_ids)
+        if new_students.exists():
+            AttendanceRecord.objects.bulk_create([
+                AttendanceRecord(
+                    tenant=session.tenant,
+                    session=session,
+                    student=s,
+                    status='P',
+                )
+                for s in new_students
+            ])
+
     def perform_create(self, serializer):
         classroom = serializer.validated_data['classroom']
         subject = serializer.validated_data.get('subject')
         session_type = serializer.validated_data.get('session_type', AttendanceSession.SessionType.DAILY)
+        date = serializer.validated_data.get('date')
+
         if classroom.tenant_id != self.request.user.tenant_id:
             raise ValidationError('Classroom must belong to your school.')
         if subject and subject.tenant_id != self.request.user.tenant_id:
             raise ValidationError('Subject must belong to your school.')
 
         self._check_attendance_permission(classroom, session_type, subject)
+        self._check_date_constraints(date)
+        self._check_duplicate_session(classroom, date, session_type, subject)
 
         serializer.save(tenant=self.request.user.tenant, teacher=self.request.user)
+        self._auto_populate_records(serializer.instance)
 
     def perform_update(self, serializer):
         classroom = serializer.validated_data.get('classroom', serializer.instance.classroom)
         subject = serializer.validated_data.get('subject', serializer.instance.subject)
         session_type = serializer.validated_data.get('session_type', serializer.instance.session_type)
+        date = serializer.validated_data.get('date', serializer.instance.date)
+
         if classroom.tenant_id != self.request.user.tenant_id:
             raise ValidationError('Classroom must belong to your school.')
         if subject and subject.tenant_id != self.request.user.tenant_id:
             raise ValidationError('Subject must belong to your school.')
 
         self._check_attendance_permission(classroom, session_type, subject)
+        self._check_date_constraints(date, instance=serializer.instance)
+        self._check_duplicate_session(classroom, date, session_type, subject, exclude_id=serializer.instance.id)
 
         serializer.save(tenant=self.request.user.tenant)
 
@@ -146,6 +219,7 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             )
 
         self._check_attendance_permission(session.classroom, session.session_type, session.subject)
+        self._check_date_constraints(session.date, instance=session)
 
         serializer = MarkAttendanceSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -232,6 +306,7 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='class-summary')
     def class_summary(self, request):
+
         classroom_id = request.query_params.get('classroom')
         term = request.query_params.get('term')
         academic_year = request.query_params.get('academic_year')
@@ -272,7 +347,82 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             })
 
         return Response(result)
+    
+    @action(detail=False, methods=['get'], url_path='export')
+    def export(self, request):
+        """
+        GET /api/academics/sessions/export/?classroom=1&date_after=2026-01-01&date_before=2026-12-31
+        Exports attendance sessions as CSV — one file per classroom, bundled in a ZIP.
+        """
+        from django.http import HttpResponse
+        import zipfile
+        import io
+        import csv
 
+        qs = self.get_queryset().filter(is_locked=True)
+        
+        classroom_id = request.query_params.get('classroom')
+        date_after = request.query_params.get('date_after')
+        date_before = request.query_params.get('date_before')
+        term = request.query_params.get('term')
+        academic_year = request.query_params.get('academic_year')
+
+        if classroom_id:
+            qs = qs.filter(classroom_id=classroom_id)
+        if date_after:
+            qs = qs.filter(date__gte=date_after)
+        if date_before:
+            qs = qs.filter(date__lte=date_before)
+        if term:
+            qs = qs.filter(term=term)
+        if academic_year:
+            qs = qs.filter(academic_year=int(academic_year))
+
+        # Group sessions by classroom
+        from collections import defaultdict
+        by_classroom = defaultdict(list)
+        for session in qs.prefetch_related('records__student'):
+            by_classroom[str(session.classroom)].append(session)
+
+        if not by_classroom:
+            return Response({'error': 'No locked sessions found for export.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Create ZIP with one CSV per classroom
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for classroom_name, sessions in by_classroom.items():
+                csv_buffer = io.StringIO()
+                writer = csv.writer(csv_buffer)
+                writer.writerow([
+                    'Session ID', 'Classroom', 'Date', 'Session Type', 'Term', 'Academic Year',
+                    'Student Name', 'Admission Number', 'Status', 'Remarks', 'Locked'
+                ])
+
+                for session in sessions:
+                    for record in session.records.all():
+                        writer.writerow([
+                            session.id,
+                            str(session.classroom),
+                            session.date,
+                            session.session_type,
+                            session.term,
+                            session.academic_year,
+                            record.student.get_full_name(),
+                            record.student.admission_number,
+                            record.status,
+                            record.remarks or '',
+                            'Yes',
+                        ])
+
+                # Sanitize filename: replace spaces/slashes
+                safe_name = classroom_name.replace(' ', '_').replace('/', '_')
+                filename = f'attendance_{safe_name}.csv'
+                zf.writestr(filename, csv_buffer.getvalue())
+
+        zip_buffer.seek(0)
+        response = HttpResponse(zip_buffer.read(), content_type='application/zip')
+        response['Content-Disposition'] = f'attachment; filename="attendance_export_{timezone.localdate()}.zip"'
+        return response
 
 class ClassTimetableViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = ClassTimetable.objects.select_related('classroom', 'uploaded_by').order_by(
