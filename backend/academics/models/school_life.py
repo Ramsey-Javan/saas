@@ -41,6 +41,10 @@ class AttendanceSession(TenantModel):
     academic_year = models.PositiveIntegerField()
     notes = models.TextField(blank=True)
     is_locked = models.BooleanField(default=False)
+    auto_marked = models.BooleanField(
+        default=False,
+        help_text="True if this session was created by the auto-mark system.",
+    )
 
     class Meta:
         unique_together = ['tenant', 'classroom', 'date', 'session_type', 'subject']
@@ -220,3 +224,4 @@ class ReportCard(TenantModel):
 
     def __str__(self):
         return f"{self.student} - {self.academic_year} {self.term or self.report_type}"
+    

@@ -265,6 +265,13 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         session.is_locked = True
         session.save(update_fields=['is_locked'])
         return Response({'detail': 'Session locked.'})
+    
+    @action(detail=True, methods=['patch'], permission_classes=[IsAdminUser], url_path='unlock')
+    def unlock(self, request, pk=None):
+        session = self.get_object()
+        session.is_locked = False
+        session.save(update_fields=['is_locked'])
+        return Response({'detail': 'Session unlocked.'})
 
     @action(detail=False, methods=['get'], url_path='today')
     def today(self, request):
@@ -423,6 +430,7 @@ class AttendanceSessionViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         response = HttpResponse(zip_buffer.read(), content_type='application/zip')
         response['Content-Disposition'] = f'attachment; filename="attendance_export_{timezone.localdate()}.zip"'
         return response
+        
 
 class ClassTimetableViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = ClassTimetable.objects.select_related('classroom', 'uploaded_by').order_by(

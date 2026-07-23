@@ -124,4 +124,5 @@ export const academicsApi = {
     params,
     responseType: 'arraybuffer',  
   }),
+  unlockSession: (id) => api.patch(`/academics/sessions/${id}/unlock/`),
 }

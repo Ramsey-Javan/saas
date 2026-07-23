@@ -51,7 +51,7 @@ class AttendanceSessionSerializer(serializers.ModelSerializer):
             'present_count', 'absent_count', 'total_students',
             'records',
         ]
-        read_only_fields = ['is_locked']
+        read_only_fields = ['is_locked', 'auto_marked']
 
     def get_classroom_name(self, obj):
         return str(obj.classroom)
@@ -91,7 +91,7 @@ class AttendanceSessionListSerializer(serializers.ModelSerializer):
             'teacher', 'teacher_name',
             'subject', 'subject_name',
             'date', 'session_type', 'term', 'academic_year',
-            'is_locked',
+            'is_locked', 'auto_marked',
             'present_count', 'absent_count', 'total_students',
         ]
 
