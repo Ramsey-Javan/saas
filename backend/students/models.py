@@ -19,6 +19,13 @@ class Classroom(models.Model):
         blank=True,
         related_name='classrooms',
     )
+    schedule_template = models.ForeignKey(
+        'timetabling.ScheduleTemplate',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='classrooms',
+    )
     academic_year = models.CharField(max_length=20)
     capacity = models.IntegerField(default=40)
     is_active = models.BooleanField(default=True)

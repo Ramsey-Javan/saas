@@ -28,6 +28,7 @@ from .school_life import (
     CoCurricularActivity,
     ReportCard,
     StudentCoCurricular,
+    TimetablePDF
 )
 
 __all__ = [
@@ -53,4 +54,5 @@ __all__ = [
     'SubStrand',
     'TenantModel',
     'TERM_CHOICES',
+    'TimetablePDF',
 ]

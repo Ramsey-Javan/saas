@@ -21,14 +21,51 @@ export const ATTENDANCE_STATUS = {
   E: { label: 'Excused', className: 'bg-gray-100 text-gray-700 border-gray-200' },
 }
 
-export const listFromResponse = (data) => data?.results || (Array.isArray(data) ? data : [])
+export const listFromResponse = (data) => {
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.results)) return data.results
+  if (Array.isArray(data?.data)) return data.data
+  if (Array.isArray(data?.items)) return data.items
+  if (Array.isArray(data?.classrooms)) return data.classrooms
+  if (Array.isArray(data?.records)) return data.records
+  return []
+}
+
 export const countFromResponse = (data) => data?.count ?? listFromResponse(data).length
 export const thisYear = () => new Date().getFullYear()
 export const todayISO = () => new Date().toISOString().slice(0, 10)
 export const termLabel = (term) => TERMS.find(t => t.value === term)?.label || term || 'Term'
-export const classroomLabel = (classroom) => (
-  classroom ? `${classroom.name || classroom.classroom_name || ''}${classroom.stream ? ` ${classroom.stream}` : ''}`.trim() : ''
-)
+
+export const classroomLabel = (classroom) => {
+  if (!classroom) return ''
+
+  const name = classroom.name || classroom.classroom_name || ''
+  const stream = classroom.stream_name || classroom.stream || ''
+
+  // If we have both a name and a stream, and the name doesn't already contain
+  // the stream, append it. This turns "Grade 2" + "East" → "Grade 2 East".
+  if (name && stream) {
+    const nameLower = name.toLowerCase()
+    const streamLower = stream.toLowerCase()
+    if (!nameLower.includes(streamLower)) {
+      return `${name} ${stream}`.trim()
+    }
+    return name
+  }
+
+  if (name) return name
+
+  // Fallback: compose from grade + stream
+  const grade =
+    typeof classroom.grade === 'string'
+      ? classroom.grade
+      : classroom.grade?.name || classroom.grade_name || ''
+  const composed = `${grade} ${stream}`.trim()
+  if (composed) return composed
+
+  return `Classroom ${classroom.id ?? 'unknown'}`
+}
+
 export const userName = (user) => [user?.first_name, user?.last_name].filter(Boolean).join(' ') || user?.email || user?.username || 'Teacher'
 
 export function Modal({ title, children, onClose, footer }) {

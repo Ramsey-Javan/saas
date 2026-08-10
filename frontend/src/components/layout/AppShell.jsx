@@ -19,54 +19,64 @@ import { useCommandPalette } from '@/components/command-palette/useCommandPalett
 
 const SEARCH_ALLOWED_ROLES = ['admin', 'superadmin']
 
-// Navigation items per role
-const NAV_ITEMS = {
+// Single source of truth for sidebar navigation. Each item declares its roles
+// so role sidebars cannot drift out of sync silently.
+const NAV_ITEMS = [
+  { label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard', roles: ['admin'] },
+  { label: 'Students', icon: Users, href: '/students', roles: ['admin', 'teacher', 'bursar'] },
+  { label: 'Staff', icon: Users, href: '/staff', roles: ['admin'] },
+  { label: 'Finance', icon: DollarSign, href: '/finance', roles: ['admin'] },
+  { label: 'Pending Cheques', icon: AlertCircle, href: '/finance/cheques', badgeKey: 'pendingCheques', roles: ['admin', 'bursar'] },
+  { label: 'Waivers Dashboard', icon: FilePlus, href: '/finance/waivers-dashboard', roles: ['admin', 'bursar'] },
+  { label: 'Academics', icon: GraduationCap, href: '/academics', roles: ['admin'] },
+  { label: 'Exams', icon: ClipboardList, href: '/academics/exams', roles: ['admin', 'teacher'] },
+  { label: 'National Exams', icon: Award, href: '/academics/national-exams', roles: ['admin'] },
+  { label: 'Timetable', icon: Calendar, href: '/academics/timetable', roles: ['admin', 'teacher', 'parent'] },
+  { label: 'Analytics', icon: BarChart3, href: '/analytics', roles: ['admin', 'teacher'] },
+  { label: 'Communication', icon: MessageSquare, href: '/communication', roles: ['admin'] },
+  { label: 'Settings', icon: Settings, href: '/settings/school-profile', roles: ['admin'] },
+
+  { label: 'Platform', icon: Globe, href: '/platform', roles: ['superadmin'] },
+  { label: 'Schools', icon: GraduationCap, href: '/platform/schools', roles: ['superadmin'] },
+
+  { label: 'Dashboard', icon: LayoutDashboard, href: '/teacher', roles: ['teacher'] },
+  { label: 'My Classes', icon: Users, href: '/teacher/classes', roles: ['teacher'] },
+  { label: 'Grades', icon: BookOpen, href: '/academics/grades', roles: ['teacher'] },
+  { label: 'Attendance', icon: CheckSquare, href: '/academics/attendance', roles: ['teacher'] },
+  { label: 'Report Cards', icon: FileText, href: '/academics/report-cards', roles: ['teacher'] },
+  { label: 'Messages', icon: MessageSquare, href: '/communication', roles: ['teacher'] },
+
+  { label: 'Finance', icon: LayoutDashboard, href: '/finance', roles: ['bursar'] },
+  { label: 'Payments', icon: DollarSign, href: '/finance/payments', roles: ['bursar'] },
+  { label: 'Generate Invoices', icon: FilePlus, href: '/finance/invoices/generate', roles: ['bursar'] },
+  { label: 'Defaulters', icon: AlertCircle, href: '/finance/defaulters', roles: ['bursar'] },
+  { label: 'Fee Structures', icon: DollarSign, href: '/finance/structures', roles: ['bursar'] },
+  { label: 'Waiver Policies', icon: Settings, href: '/finance/waiver-policies', roles: ['bursar'] },
+  { label: 'Reports', icon: BookOpen, href: '/finance/reports', roles: ['bursar'] },
+
+  { label: 'My Children', icon: Users, href: '/parent', roles: ['parent'] },
+  { label: 'Fees', icon: DollarSign, href: '/parent/fees', roles: ['parent'] },
+]
+
+const NAV_ORDER = {
   admin: [
-    { label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
-    { label: 'Students', icon: Users, href: '/students' },
-    { label: 'Staff', icon: Users, href: '/staff' },
-    { label: 'Finance', icon: DollarSign, href: '/finance' },
-    { label: 'Pending Cheques', icon: AlertCircle, href: '/finance/cheques', badgeKey: 'pendingCheques' },
-    { label: 'Waivers Dashboard', icon: FilePlus, href: '/finance/waivers-dashboard' },
-    { label: 'Academics', icon: GraduationCap, href: '/academics' },
-    { label: 'Exams', icon: ClipboardList, href: '/academics/exams' },
-    { label: 'National Exams', icon: Award, href: '/academics/national-exams' },
-    { label: 'Analytics', icon: BarChart3, href: '/analytics' },
-    { label: 'Communication', icon: MessageSquare, href: '/communication' },
-    { label: 'Settings', icon: Settings, href: '/settings/school-profile' },
+    '/dashboard', '/students', '/staff', '/finance', '/finance/cheques',
+    '/finance/waivers-dashboard', '/academics', '/academics/exams',
+    '/academics/national-exams', '/academics/timetable', '/analytics',
+    '/communication', '/settings/school-profile',
   ],
-  superadmin: [
-    { label: 'Platform', icon: Globe, href: '/platform' },
-    { label: 'Schools', icon: GraduationCap, href: '/platform/schools' },
-  ],
+  superadmin: ['/platform', '/platform/schools'],
   teacher: [
-    { label: 'Dashboard', icon: LayoutDashboard, href: '/teacher' },
-    { label: 'Analytics', icon: BarChart3, href: '/analytics' },
-    { label: 'Students', icon: Users, href: '/students' },
-    { label: 'My Classes', icon: Users, href: '/teacher/classes' },
-    { label: 'Grades', icon: BookOpen, href: '/academics/grades' },
-    { label: 'Exams', icon: ClipboardList, href: '/academics/exams' },
-    { label: 'Attendance', icon: CheckSquare, href: '/academics/attendance' },
-    { label: 'Report Cards', icon: FileText, href: '/academics/report-cards' },
-    { label: 'Timetable', icon: Calendar, href: '/academics/timetable' },
-    { label: 'Messages', icon: MessageSquare, href: '/communication' },
+    '/teacher', '/analytics', '/students', '/teacher/classes',
+    '/academics/grades', '/academics/exams', '/academics/attendance',
+    '/academics/report-cards', '/academics/timetable', '/communication',
   ],
   bursar: [
-    { label: 'Finance', icon: LayoutDashboard, href: '/finance' },
-    { label: 'Students', icon: Users, href: '/students' },
-    { label: 'Payments', icon: DollarSign, href: '/finance/payments' },
-    { label: 'Pending Cheques', icon: AlertCircle, href: '/finance/cheques', badgeKey: 'pendingCheques' },
-    { label: 'Generate Invoices', icon: FilePlus, href: '/finance/invoices/generate' },
-    { label: 'Defaulters', icon: AlertCircle, href: '/finance/defaulters' },
-    { label: 'Fee Structures', icon: DollarSign, href: '/finance/structures' },
-    { label: 'Waivers Dashboard', icon: FilePlus, href: '/finance/waivers-dashboard' },
-    { label: 'Waiver Policies', icon: Settings, href: '/finance/waiver-policies' },
-    { label: 'Reports', icon: BookOpen, href: '/finance/reports' },
+    '/finance', '/students', '/finance/payments', '/finance/cheques',
+    '/finance/invoices/generate', '/finance/defaulters', '/finance/structures',
+    '/finance/waivers-dashboard', '/finance/waiver-policies', '/finance/reports',
   ],
-  parent: [
-    { label: 'My Children', icon: Users, href: '/parent' },
-    { label: 'Fees', icon: DollarSign, href: '/parent/fees' },
-  ],
+  parent: ['/parent', '/parent/fees', '/academics/timetable'],
 }
 
 // Inserted right after "Students" in the teacher nav when applicable —
@@ -145,7 +155,12 @@ export default function AppShell({ children }) {
     }
   }, [canSearch, paletteOpen, setPaletteOpen])
 
-  const baseNavItems = NAV_ITEMS[user?.role] || NAV_ITEMS.admin
+  const baseNavItems = NAV_ITEMS
+    .filter(item => item.roles.includes(user?.role || 'admin'))
+    .sort((left, right) => {
+      const order = NAV_ORDER[user?.role || 'admin'] || []
+      return order.indexOf(left.href) - order.indexOf(right.href)
+    })
   const navItems = (user?.role === 'teacher' && isHomeroomTeacher)
     ? (() => {
         const studentsIndex = baseNavItems.findIndex(item => item.href === '/students')

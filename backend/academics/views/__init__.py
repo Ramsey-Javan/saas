@@ -28,6 +28,7 @@ from .school_life import (
     CoCurricularActivityViewSet,
     ReportCardViewSet,
     StudentCoCurricularViewSet,
+    TimetablePDFViewSet,
 )
 
 __all__ = [
@@ -55,4 +56,5 @@ __all__ = [
     '_teacher_classroom_ids',
     '_teacher_subject_ids',
     '_validate_student_for_user',
+    'TimetablePDFViewSet',
 ]

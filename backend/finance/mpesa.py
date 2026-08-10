@@ -429,7 +429,7 @@ class MpesaService:
                             payment.save()
                             return {"status": "ignored", "reason": "duplicate mpesa receipt"}
 
-                        payment.status = "COMPLETED"
+                        payment.status = "completed"
                         payment.mpesa_receipt_number = receipt_no
                         payment.mpesa_result_code = str(result_code)
                         payment.notes = result_desc
@@ -465,7 +465,7 @@ class MpesaService:
                         user_message = result_desc or "Transaction failed at Safaricom."
                         status = "failed"
 
-                    payment.status = status.upper() if status in ["completed", "failed", "expired"] else "FAILED"
+                    payment.status = status.upper() if status in ["completed", "failed", "expired"] else "failed"
                     payment.failure_reason = user_message
                     payment.mpesa_result_code = str(result_code)
                     payment.notes = f"{user_message} (Daraja code: {result_code})"
@@ -549,14 +549,14 @@ class MpesaService:
                 # Re-fetch with lock (NO select_related before select_for_update)
                 payment = Payment.objects.select_for_update().get(pk=payment.id)
 
-                if payment.status not in ["pending", "PENDING"]:
+                if payment.status.lower() != "pending" :
                     return payment
 
                 code_str = str(result_code)
 
                 if code_str == "0":
                     # Success via query
-                    payment.status = "COMPLETED"
+                    payment.status = "completed"
                     payment.mpesa_result_code = code_str
                     # Generate a synthetic receipt number if we don't have one
                     payment.mpesa_receipt_number = (
@@ -581,7 +581,7 @@ class MpesaService:
 
                 elif code_str in ["1032", "1037", "2001", "1001"]:
                     mapped = self.RESULT_CODE_MAP.get(code_str, ("Unknown failure", "failed"))
-                    payment.status = "FAILED"
+                    payment.status = "failed"
                     payment.mpesa_result_code = code_str
                     payment.failure_reason = f"Daraja Query: {mapped[0]}"
                     payment.notes = payment.failure_reason
@@ -614,7 +614,7 @@ class MpesaService:
                 with transaction.atomic():
                     payment = Payment.objects.select_for_update().get(pk=payment.id)
                     if payment.status in ["pending", "PENDING"]:
-                        payment.status = "EXPIRED"
+                        payment.status = "expired"
                         payment.failure_reason = f"STK push timed out. No response from user within {self.TIMEOUT_SECONDS} seconds."
                         payment.notes = payment.failure_reason
                         payment.failed_at = timezone.now()

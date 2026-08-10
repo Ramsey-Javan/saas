@@ -104,6 +104,33 @@ class ClassTimetable(TenantModel):
     def __str__(self):
         return f"{self.classroom} timetable - {self.term} {self.academic_year}"
 
+class TimetablePDF(TenantModel):
+    classroom = models.ForeignKey(
+        'students.Classroom',
+        on_delete=models.CASCADE,
+        related_name='timetable_pdfs',
+    )
+    term = models.CharField(max_length=10, choices=[
+        ('term1', 'Term 1'),
+        ('term2', 'Term 2'),
+        ('term3', 'Term 3'),
+    ])
+    academic_year = models.PositiveIntegerField()
+    file = models.FileField(upload_to='timetables/')
+    notes = models.TextField(blank=True)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.classroom} {self.term} {self.academic_year}'
 
 class CoCurricularActivity(TenantModel):
     class Category(models.TextChoices):
