@@ -35,6 +35,7 @@ from .school_life import (
     MarkAttendanceSerializer,
     ReportCardSerializer,
     StudentCoCurricularSerializer,
+    TimetablePDFSerializer,
 )
 
 __all__ = [
@@ -67,4 +68,5 @@ __all__ = [
     'SubjectListSerializer',
     'SubjectSerializer',
     'SubStrandSerializer',
+    'TimetablePDFSerializer',
 ]

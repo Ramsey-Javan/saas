@@ -11,7 +11,8 @@ class ClassroomSerializer(serializers.ModelSerializer):
         model = Classroom
         fields = [
             'id', 'name', 'grade_level', 'stream', 'class_teacher',
-            'class_teacher_name', 'academic_year', 'capacity', 'student_count',
+            'class_teacher_name', 'schedule_template', 'academic_year',
+            'capacity', 'student_count',
         ]
 
     def get_class_teacher_name(self, obj):

@@ -271,6 +271,98 @@ class AttendanceRecordFactory(DjangoModelFactory):
     remarks = ''
 
 
+class ScheduleTemplateFactory(DjangoModelFactory):
+    class Meta:
+        model = 'timetabling.ScheduleTemplate'
+
+    tenant = factory.SubFactory(TenantFactory)
+    name = factory.Sequence(lambda n: f'Default Schedule {n}')
+    is_active = True
+
+
+class PeriodFactory(DjangoModelFactory):
+    class Meta:
+        model = 'timetabling.Period'
+
+    tenant = factory.SubFactory(TenantFactory)
+    schedule_template = factory.SubFactory(ScheduleTemplateFactory, tenant=factory.SelfAttribute('..tenant'))
+    day_of_week = 1
+    order = factory.Sequence(lambda n: n + 1)
+    start_time = '08:00'
+    end_time = '08:40'
+    is_break = False
+
+
+class RoomResourceFactory(DjangoModelFactory):
+    class Meta:
+        model = 'timetabling.RoomResource'
+
+    tenant = factory.SubFactory(TenantFactory)
+    name = factory.Sequence(lambda n: f'Lab {n}')
+    room_type = 'lab'
+    capacity = 40
+    is_active = True
+
+
+class SubjectRuleFactory(DjangoModelFactory):
+    class Meta:
+        model = 'timetabling.SubjectRule'
+
+    tenant = factory.SubFactory(TenantFactory)
+    subject = factory.SubFactory(SubjectFactory, tenant=factory.SelfAttribute('..tenant'))
+    grade_band = 'Grade 4'
+    periods_per_week = 1
+    requires_double = False
+    requires_room_type = None
+    is_hard_excluded = True
+    is_active = True
+
+
+class TeacherSubjectAssignmentFactory(DjangoModelFactory):
+    class Meta:
+        model = 'timetabling.TeacherSubjectAssignment'
+
+    tenant = factory.SubFactory(TenantFactory)
+    teacher = factory.SubFactory(TeacherUserFactory, tenant=factory.SelfAttribute('..tenant'))
+    subject = factory.SubFactory(SubjectFactory, tenant=factory.SelfAttribute('..tenant'))
+    classroom = factory.SubFactory(ClassroomFactory, tenant=factory.SelfAttribute('..tenant'))
+
+
+class TeacherWorkloadLimitFactory(DjangoModelFactory):
+    class Meta:
+        model = 'timetabling.TeacherWorkloadLimit'
+
+    tenant = factory.SubFactory(TenantFactory)
+    teacher = factory.SubFactory(TeacherUserFactory, tenant=factory.SelfAttribute('..tenant'))
+    max_periods_per_day = 6
+    max_periods_per_week = 30
+
+
+class TimetableJobFactory(DjangoModelFactory):
+    class Meta:
+        model = 'timetabling.TimetableJob'
+
+    tenant = factory.SubFactory(TenantFactory)
+    term = 'term1'
+    academic_year = 2026
+    status = 'pending'
+    created_by = factory.SubFactory(AdminUserFactory, tenant=factory.SelfAttribute('..tenant'))
+
+
+class TimetableEntryFactory(DjangoModelFactory):
+    class Meta:
+        model = 'timetabling.TimetableEntry'
+
+    tenant = factory.SubFactory(TenantFactory)
+    job = factory.SubFactory(TimetableJobFactory, tenant=factory.SelfAttribute('..tenant'))
+    classroom = factory.SubFactory(ClassroomFactory, tenant=factory.SelfAttribute('..tenant'))
+    subject = factory.SubFactory(SubjectFactory, tenant=factory.SelfAttribute('..tenant'))
+    teacher = factory.SubFactory(TeacherUserFactory, tenant=factory.SelfAttribute('..tenant'))
+    period = factory.SubFactory(PeriodFactory, tenant=factory.SelfAttribute('..tenant'))
+    room = None
+    locked = False
+
+
 class FeeStructureFactory(DjangoModelFactory):
     class Meta:
         model = 'finance.FeeStructure'

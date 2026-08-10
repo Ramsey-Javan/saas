@@ -8,6 +8,7 @@ from ..models import (
     CoCurricularActivity,
     ReportCard,
     StudentCoCurricular,
+    TimetablePDF
 )
 
 
@@ -149,6 +150,27 @@ class ClassTimetableSerializer(serializers.ModelSerializer):
             return request.build_absolute_uri(obj.file.url)
         return None
 
+
+class TimetablePDFSerializer(serializers.ModelSerializer):
+    classroom_name = serializers.SerializerMethodField()
+    file_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TimetablePDF
+        fields = [
+            'id', 'classroom', 'classroom_name', 'term', 'academic_year',
+            'file', 'file_url', 'notes', 'created_at',
+        ]
+        read_only_fields = ['created_at']
+
+    def get_classroom_name(self, obj):
+        return str(obj.classroom)
+
+    def get_file_url(self, obj):
+        request = self.context.get('request')
+        if obj.file and request:
+            return request.build_absolute_uri(obj.file.url)
+        return obj.file.url if obj.file else None
 
 class CoCurricularActivitySerializer(serializers.ModelSerializer):
     class Meta:

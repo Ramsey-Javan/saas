@@ -40,7 +40,7 @@ class SubjectSerializer(serializers.ModelSerializer):
         model = Subject
         fields = [
             'id', 'name', 'code', 'description',
-            'grade_levels', 'is_preloaded', 'is_active',
+            'grade_levels', 'curriculum_phase', 'is_preloaded', 'is_active',
             'order', 'strands', 'strand_count',
         ]
         read_only_fields = ['is_preloaded']
@@ -54,7 +54,7 @@ class SubjectListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Subject
-        fields = ['id', 'name', 'code', 'grade_levels', 'is_active', 'order']
+        fields = ['id', 'name', 'code', 'grade_levels', 'curriculum_phase', 'is_active', 'order']
 
 
 class ClassSubjectAssignmentSerializer(serializers.ModelSerializer):
@@ -79,3 +79,4 @@ class ClassSubjectAssignmentSerializer(serializers.ModelSerializer):
 
     def get_classroom_name(self, obj):
         return str(obj.classroom)
+    

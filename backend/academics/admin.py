@@ -21,6 +21,7 @@ from .models import (
     StudentCoCurricular,
     Subject,
     SubStrand,
+    TimetablePDF,
 )
 
 
@@ -160,3 +161,9 @@ class ReportCardAdmin(admin.ModelAdmin):
     list_display = ('student', 'classroom', 'term', 'academic_year', 'report_type', 'status', 'generated_at')
     list_filter = ('tenant', 'term', 'academic_year', 'report_type', 'status')
     search_fields = ('student__first_name', 'student__last_name', 'student__admission_number')
+
+
+@admin.register(TimetablePDF)
+class TimetablePDFAdmin(admin.ModelAdmin):
+    list_display = ('classroom', 'term', 'academic_year', 'tenant', 'created_at')
+    list_filter = ('term', 'academic_year', 'tenant')

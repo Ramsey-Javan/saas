@@ -130,8 +130,19 @@ api.interceptors.response.use(
       error.message = error.message || `Request failed with status ${status}`
     }
 
-    // 4. Toast the clean, unified error string
-    toastBus.emit(error.message, 'error')
+    // 4. Toast the clean, unified error string — unless the caller opted out
+    // (e.g. role-scoped fetches that handle 403 with an empty state).
+    // Defensive soft-fail: GET permission_denied is usually a role-scoped
+    // endpoint the UI should empty-state, not a toast of raw DRF text.
+    const method = (original?.method || 'get').toLowerCase()
+    const isSoftPermissionDeny =
+      status === 403
+      && method === 'get'
+      && (updatedData?.error?.code === 'permission_denied' || error.message === 'You do not have permission to perform this action.')
+
+    if (!original?.skipErrorToast && !isSoftPermissionDeny) {
+      toastBus.emit(error.message, 'error')
+    }
 
     return Promise.reject(error)
   }

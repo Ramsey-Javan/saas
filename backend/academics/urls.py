@@ -21,6 +21,7 @@ from .views.school_life import (
     CoCurricularActivityViewSet,
     ReportCardViewSet,
     StudentCoCurricularViewSet,
+    TimetablePDFViewSet,
 )
 
 router = DefaultRouter()
@@ -41,6 +42,7 @@ router.register('timetables', ClassTimetableViewSet, basename='timetable')
 router.register('activities', CoCurricularActivityViewSet, basename='activity')
 router.register('co-curricular', StudentCoCurricularViewSet, basename='cocurricular')
 router.register('report-cards', ReportCardViewSet, basename='reportcard')
+router.register('timetables', TimetablePDFViewSet, basename='timetable-pdf')
 
 urlpatterns = [
     path('exam-config/', ExamConfigViewSet.as_view({'get': 'list', 'put': 'update'}), name='examconfig-root'),

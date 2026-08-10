@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     'students',
     'finance',
     'academics.apps.AcademicsConfig',
+    'timetabling.apps.TimetablingConfig',
     'communication.apps.CommunicationConfig',
     'activity',
     'dashboard.apps.DashboardConfig',
@@ -136,6 +137,10 @@ CORS_ALLOW_CREDENTIALS = True
 CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_ROUTES = {
+    'timetabling.tasks.generate_timetable': {'queue': 'timetable_solver'},
+    'timetabling.tasks.regenerate_partial': {'queue': 'timetable_solver'},
+}
 CELERY_BEAT_SCHEDULE = {
     'daily-fee-reminders': {
         'task': 'communication.tasks.send_fee_reminders_task',
@@ -225,7 +230,12 @@ TENANT_APPS = [
     'students',
     'finance',
     'academics',
+    'timetabling',
     'communication',
     'dashboard',
     'analytics',
 ]
+
+# Timetable solver settings
+TIMETABLE_SOLVER_MAX_SECONDS = int(os.environ.get('TIMETABLE_SOLVER_MAX_SECONDS', '300'))
+TIMETABLE_SOLVER_WORKERS = int(os.environ.get('TIMETABLE_SOLVER_WORKERS', '8'))

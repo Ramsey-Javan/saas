@@ -1,7 +1,6 @@
 import React from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'  
-import { ProtectedRoute, GuestRoute, ROLE_DASHBOARDS, RootRedirect } from '@/components/auth/ProtectedRoute'
-import { useAuthStore } from '@/store/authStore'  
+import { ProtectedRoute, GuestRoute, RootRedirect } from '@/components/auth/ProtectedRoute'
 import { AdminDashboard, TeacherDashboard, ParentDashboard } from '@/pages/dashboard'
 import { StudentsPage, StudentDetailPage, AdmitStudentPage, BulkImportPage, StudentIdCardPage, ClassroomsPage, MyHomeClassPage } from '@/pages/students'
 import BursarDashboard from '@/pages/finance/BursarDashboard'
@@ -24,9 +23,9 @@ import GradeSheetPage from '@/pages/academics/GradeSheetPage'
 import AttendanceDashboard from '@/pages/academics/AttendanceDashboard'
 import MarkAttendancePage from '@/pages/academics/MarkAttendancePage'
 import ClassAttendancePage from '@/pages/academics/ClassAttendancePage'
-import TimetablePage from '@/pages/academics/TimetablePage'
-import ReportCardsDashboard from '@/pages/academics/ReportCardsDashboard'
+import TimetablePage from "@/pages/academics/timetable/TimetablePage";
 import ReportCardDetailPage from '@/pages/academics/ReportCardDetailPage'
+import ReportCardsDashboard from '@/pages/academics/ReportCardsDashboard'
 import ExamsDashboard from '@/pages/academics/ExamsDashboard'
 import ExamMarksSheetPage from '@/pages/academics/ExamMarksSheetPage'
 import ExamResultsPage from '@/pages/academics/ExamResultsPage'
@@ -204,11 +203,14 @@ export default function App() {
             <SafeRoute><ClassAttendancePage /></SafeRoute>
           </ProtectedShell>
         } />
+        
+        {/* ✅ TIMETABLE ROUTE IS ALREADY CORRECTLY CONFIGURED HERE */}
         <Route path="/academics/timetable" element={
           <ProtectedShell allowedRoles={['admin','teacher','parent']}>
             <SafeRoute><TimetablePage /></SafeRoute>
           </ProtectedShell>
         } />
+        
         <Route path="/academics/report-cards" element={
           <ProtectedShell allowedRoles={['admin','teacher']}>
             <SafeRoute><ReportCardsDashboard /></SafeRoute>
@@ -294,7 +296,7 @@ export default function App() {
           </ProtectedShell>
         } />
         
-        {/* ANALYTICS ROUTES */}
+        {/* ✅ ANALYTICS ROUTES (CLEANED UP & DEDUPLICATED) */}
         <Route path="/analytics" element={
           <ProtectedShell allowedRoles={['admin', 'teacher']}>
             <SafeRoute><AnalyticsDashboard /></SafeRoute>
@@ -303,6 +305,11 @@ export default function App() {
         <Route path="/analytics/class/:classroomId" element={
           <ProtectedShell allowedRoles={['admin', 'teacher']}>
             <SafeRoute><ClassPerformancePage /></SafeRoute>
+          </ProtectedShell>
+        } />
+        <Route path="/analytics/class/:classroomId/subject/:subjectId" element={
+          <ProtectedShell allowedRoles={['admin', 'teacher']}>
+            <SafeRoute><ClassSubjectAnalysisPage /></SafeRoute>
           </ProtectedShell>
         } />
         <Route path="/analytics/student/:studentId" element={
@@ -315,6 +322,11 @@ export default function App() {
             <SafeRoute><SubjectAnalysisPage /></SafeRoute>
           </ProtectedShell>
         } />
+        <Route path="/analytics/subject-teacher/:subjectId" element={
+          <ProtectedShell allowedRoles={['admin', 'teacher']}>
+            <SafeRoute><SubjectTeacherDetailPage /></SafeRoute>
+          </ProtectedShell>
+        } />
         <Route path="/analytics/school-performance" element={
           <ProtectedShell allowedRoles={['admin', 'teacher']}>
             <SafeRoute><SchoolPerformancePage /></SafeRoute>
@@ -325,49 +337,7 @@ export default function App() {
             <SafeRoute><EarlyWarningPage /></SafeRoute>
           </ProtectedShell>
         } />
-        <Route path="/analytics" element={
-          <ProtectedShell allowedRoles={['admin', 'teacher']}>
-            <AnalyticsDashboard />
-          </ProtectedShell>
-        } />
-        <Route path="/analytics/class/:classroomId" element={
-          <ProtectedShell allowedRoles={['admin', 'teacher']}>
-            <ClassPerformancePage />
-          </ProtectedShell>
-        } />
-        <Route path="/analytics/class/:classroomId/subject/:subjectId" element={
-          <ProtectedShell allowedRoles={['admin', 'teacher']}>
-            <ClassSubjectAnalysisPage />
-          </ProtectedShell>
-        } />
-        <Route path="/analytics/student/:studentId" element={
-          <ProtectedShell allowedRoles={['admin', 'teacher', 'parent']}>
-            <StudentProfilePage />
-          </ProtectedShell>
-        } />
-        <Route path="/analytics/subject/:subjectId" element={
-          <ProtectedShell allowedRoles={['admin', 'teacher']}>
-            <SubjectAnalysisPage />
-          </ProtectedShell>
-        } />
-        <Route path="/analytics/school-performance" element={
-          <ProtectedShell allowedRoles={['admin']}>
-            <SchoolPerformancePage />
-          </ProtectedShell>
-        } />
-        <Route path="/analytics/early-warning" element={
-          <ProtectedShell allowedRoles={['admin', 'teacher']}>
-            <EarlyWarningPage />
-          </ProtectedShell>
-        } />
-        <Route path="/analytics/subject-teacher/:subjectId" element={
-          <ProtectedShell allowedRoles={['admin', 'teacher']}>
-            <SubjectTeacherDetailPage />
-          </ProtectedShell>
-        } />
         
-        {/* STUDENT PERFORMANCE ROUTES */}
-
         {/* COMMUNICATION ROUTES */}
         <Route path="/communication" element={
           <ProtectedShell allowedRoles={['admin','teacher']}>
@@ -428,6 +398,11 @@ export default function App() {
             <SafeRoute><SchoolProfileSettingsPage /></SafeRoute>
           </ProtectedShell>
         } />
+        <Route path="/settings/change-password" element={
+          <ProtectedShell allowedRoles={['admin', 'teacher', 'parent', 'bursar']}>
+            <SafeRoute><ChangePasswordSettingsPage /></SafeRoute>
+          </ProtectedShell>
+        } />
         <Route path="/platform" element={
           <ProtectedShell allowedRoles={['superadmin']}>
             <SafeRoute><SuperadminDashboard /></SafeRoute>
@@ -443,11 +418,11 @@ export default function App() {
             <SafeRoute><PlatformSchoolDetailPage /></SafeRoute>
           </ProtectedShell>
         } />
-        <Route path="/settings/change-password" element={<SafeRoute><ChangePasswordSettingsPage /></SafeRoute>} />
+        
         
         {/* PUBLIC/AUTH GUEST ROUTES */}
-        <Route path="/forgot-password" element={<SafeRoute><ForgotPasswordPage /></SafeRoute>} />
-        <Route path="/reset-password" element={<SafeRoute><ResetPasswordPage /></SafeRoute>} />
+        <Route path="/forgot-password" element={<GuestRoute><SafeRoute><ForgotPasswordPage /></SafeRoute></GuestRoute>} />
+        <Route path="/reset-password" element={<GuestRoute><SafeRoute><ResetPasswordPage /></SafeRoute></GuestRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

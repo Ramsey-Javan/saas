@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, School, Users } from 'lucide-react'
 import { studentsApi } from '@/api/students'
+import { timetablingApi } from '@/api/timetabling'
 import { Button, Card, EmptyState, Input, PageHeader, Select, Spinner } from '@/components/ui'
 
 const GRADE_LEVELS = [
@@ -17,11 +18,13 @@ const emptyForm = {
   stream: '',
   academic_year: String(new Date().getFullYear()),
   capacity: 40,
+  schedule_template: '',
 }
 
 export default function ClassroomsPage() {
   const navigate = useNavigate()
   const [classrooms, setClassrooms] = useState([])
+  const [scheduleTemplates, setScheduleTemplates] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -42,13 +45,21 @@ export default function ClassroomsPage() {
   const load = () => {
     setLoading(true)
     setError('')
-    studentsApi.getClassrooms()
-      .then((r) => setClassrooms(listFromResponse(r.data)))
+    Promise.all([
+      studentsApi.getClassrooms(),
+      timetablingApi.getScheduleTemplates({}),
+    ])
+      .then(([classroomRes, templateRes]) => {
+        setClassrooms(listFromResponse(classroomRes.data))
+        setScheduleTemplates(listFromResponse(templateRes.data))
+      })
       .catch(() => setError('Failed to load classrooms.'))
       .finally(() => setLoading(false))
   }
 
   useEffect(() => { load() }, [])
+
+  const scheduleTemplateName = (id) => scheduleTemplates.find((t) => String(t.id) === String(id))?.name
 
   const openCreate = () => {
     setCreateForm(emptyForm)
@@ -64,6 +75,7 @@ export default function ClassroomsPage() {
       await studentsApi.createClassroom({
         ...createForm,
         capacity: Number(createForm.capacity),
+        schedule_template: createForm.schedule_template || null,
       })
       setCreateOpen(false)
       load()
@@ -87,6 +99,7 @@ export default function ClassroomsPage() {
       stream: classroom.stream || '',
       academic_year: classroom.academic_year,
       capacity: classroom.capacity,
+      schedule_template: classroom.schedule_template || '',
     })
     setEditError('')
   }
@@ -99,6 +112,7 @@ export default function ClassroomsPage() {
       await studentsApi.updateClassroom(editTarget.id, {
         ...editForm,
         capacity: Number(editForm.capacity),
+        schedule_template: editForm.schedule_template || null,
       })
       setEditTarget(null)
       load()
@@ -156,6 +170,7 @@ export default function ClassroomsPage() {
               <tr>
                 <th className="px-4 py-3">Class</th>
                 <th className="px-4 py-3">Grade Level</th>
+                <th className="px-4 py-3">Bell Schedule</th>
                 <th className="px-4 py-3">Academic Year</th>
                 <th className="px-4 py-3">Students</th>
                 <th className="px-4 py-3">Capacity</th>
@@ -170,6 +185,13 @@ export default function ClassroomsPage() {
                     {classroom.name}{classroom.stream ? ` ${classroom.stream}` : ''}
                   </td>
                   <td className="px-4 py-3 text-gray-600">{classroom.grade_level || '—'}</td>
+                  <td className="px-4 py-3 text-gray-600">
+                    {classroom.schedule_template ? (
+                      scheduleTemplateName(classroom.schedule_template) || '—'
+                    ) : (
+                      <span className="text-amber-600">Not set</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-gray-600">{classroom.academic_year}</td>
                   <td className="px-4 py-3 text-gray-600">
                     <span className="inline-flex items-center gap-1">
@@ -240,6 +262,16 @@ export default function ClassroomsPage() {
                 value={createForm.stream}
                 onChange={(e) => setCreateForm((f) => ({ ...f, stream: e.target.value }))}
               />
+              <Select
+                label="Bell Schedule"
+                value={createForm.schedule_template}
+                onChange={(e) => setCreateForm((f) => ({ ...f, schedule_template: e.target.value }))}
+              >
+                <option value="">Not set (timetable can't be generated until set)</option>
+                {scheduleTemplates.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </Select>
               <Input
                 label="Academic Year"
                 value={createForm.academic_year}
@@ -291,6 +323,16 @@ export default function ClassroomsPage() {
                 value={editForm.stream}
                 onChange={(e) => setEditForm((f) => ({ ...f, stream: e.target.value }))}
               />
+              <Select
+                label="Bell Schedule"
+                value={editForm.schedule_template}
+                onChange={(e) => setEditForm((f) => ({ ...f, schedule_template: e.target.value }))}
+              >
+                <option value="">Not set (timetable can't be generated until set)</option>
+                {scheduleTemplates.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </Select>
               <Input
                 label="Academic Year"
                 value={editForm.academic_year}

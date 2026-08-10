@@ -21,6 +21,22 @@ class Subject(TenantModel):
     is_active = models.BooleanField(default=True)
     order = models.PositiveIntegerField(default=0)
 
+    class CurriculumPhase(models.TextChoices):
+        PP = 'pp', 'Pre-Primary'
+        LOWER_PRIMARY = 'lower_primary', 'Lower Primary (Grade 1-3)'
+        UPPER_PRIMARY = 'upper_primary', 'Upper Primary (Grade 4-6)'
+        JSS = 'jss', 'Junior Secondary (Grade 7-9)'
+        SSS = 'sss', 'Senior Secondary (Grade 10-12)'
+        ALL = 'all', 'All Levels'
+
+    curriculum_phase = models.CharField(
+        max_length=20,
+        choices=CurriculumPhase.choices,
+        default=CurriculumPhase.ALL,
+        help_text='Which grade band this subject is designed for.',
+    )
+
+
     class Meta:
         ordering = ['order', 'name']
         unique_together = ['tenant', 'code']

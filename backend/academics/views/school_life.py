@@ -25,6 +25,7 @@ from ..models import (
     ExamResult,
     ReportCard,
     StudentCoCurricular,
+    TimetablePDF
 )
 from ..permissions import (
     CanViewReportCard,
@@ -42,6 +43,7 @@ from ..serializers import (
     MarkAttendanceSerializer,
     ReportCardSerializer,
     StudentCoCurricularSerializer,
+    TimetablePDFSerializer,
 )
 from .mixins import (
     TenantScopedMixin,
@@ -466,11 +468,28 @@ class ClassTimetableViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         serializer.save(tenant=self.request.user.tenant, uploaded_by=self.request.user)
 
     def perform_update(self, serializer):
+
         classroom = serializer.validated_data.get('classroom', serializer.instance.classroom)
         if classroom.tenant_id != self.request.user.tenant_id:
             raise ValidationError('Classroom must belong to your school.')
         serializer.save(tenant=self.request.user.tenant)
+class TimetablePDFViewSet(viewsets.ModelViewSet):
+    queryset = TimetablePDF.objects.select_related('classroom').order_by('-created_at')
+    serializer_class = TimetablePDFSerializer
+    parser_classes = [MultiPartParser, FormParser]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['classroom', 'term', 'academic_year']
 
+    def get_queryset(self):
+        qs = TimetablePDF.objects.select_related('classroom').order_by('-created_at')
+        tenant = getattr(self.request.user, 'tenant', None)
+        if tenant:
+            return qs.filter(tenant=tenant)
+        return qs.none()
+
+    def perform_create(self, serializer):
+        tenant = getattr(self.request.user, 'tenant', None)
+        serializer.save(tenant=tenant, uploaded_by=self.request.user)
 
 class CoCurricularActivityViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = CoCurricularActivity.objects.order_by('category', 'name')

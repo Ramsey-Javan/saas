@@ -47,11 +47,36 @@ services:
       REDIS_URL: redis://redis:6379/0
       REDIS_CACHE_URL: redis://redis:6379/1
 
-  celery:
+  # Worker dedicated to fast background tasks (M-Pesa, emails, light jobs)
+  celery_default:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A core worker -l info
+    command: celery -A core worker -l info -Q celery
+    volumes:
+      - ./backend:/app
+    env_file:
+      - ./backend/.env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DB_NAME: saas_db
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_HOST: db
+      DB_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      REDIS_CACHE_URL: redis://redis:6379/1
+
+  # Worker dedicated exclusively to heavy timetable calculations
+  celery_timetable:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A core worker -l info -Q timetable_solver
     volumes:
       - ./backend:/app
     env_file:
