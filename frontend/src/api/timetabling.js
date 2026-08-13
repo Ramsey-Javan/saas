@@ -31,4 +31,6 @@ export const timetablingApi = {
   lockEntry: (id, locked) => api.post(`/timetabling/entries/${id}/lock/`, { locked }),
   publishJob: (id) => api.post(`/timetabling/jobs/${id}/publish/`),
   createEntry: (data) => api.post('/timetabling/entries/', data),
+  copyFromTerm: (data) => api.post('/timetabling/jobs/copy-from-term/', data),
+  downloadTimetablePdf: (params) => api.get('/timetabling/pdf/', { params, responseType: 'blob' }),
 }

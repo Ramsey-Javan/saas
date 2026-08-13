@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.http import HttpResponse
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
@@ -7,11 +8,18 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from students.models import Student
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from ..models import TimetableEntry, TimetableJob
+from students.models import Classroom, Student
+
+from ..models import TeacherSubjectAssignment, TimetableEntry, TimetableJob
 from ..permissions import IsTimetableAdmin, IsTimetableAdminOrReadOnly, is_admin, is_parent, is_teacher
 from ..serializers import (
+    CopyTimetableSerializer,
     PartialRegenerateSerializer,
     TimetableEntrySerializer,
     TimetableEntryUpdateSerializer,
@@ -50,9 +58,6 @@ class TimetableJobViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     permission_classes = [IsTimetableAdmin]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['term', 'academic_year', 'status']
-    # A school's job history is always small and bounded (one row per generate/
-    # regenerate click), and the wizard/timetable page always wants the full
-    # list to find the latest job — never worth paginating.
     pagination_class = None
 
     def create(self, request, *args, **kwargs):
@@ -94,6 +99,80 @@ class TimetableJobViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         job.save(update_fields=['published', 'published_at', 'updated_at'])
         return Response(self.get_serializer(job).data)
 
+    @action(detail=False, methods=['post'], url_path='copy-from-term')
+    def copy_from_term(self, request):
+        serializer = CopyTimetableSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        tenant = request.user.tenant
+
+        source_term = serializer.validated_data['source_term']
+        source_year = serializer.validated_data['source_academic_year']
+        target_term = serializer.validated_data['target_term']
+        target_year = serializer.validated_data['target_academic_year']
+
+        source_job = TimetableJob.objects.filter(
+            tenant=tenant,
+            term=source_term,
+            academic_year=source_year,
+            status=TimetableJob.Status.DONE,
+        ).order_by('-published', '-created_at').first()
+
+        if not source_job:
+            return Response(
+                {'detail': f'No completed timetable found for {source_term} {source_year}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            target_job = TimetableJob.objects.create(
+                tenant=tenant,
+                term=target_term,
+                academic_year=target_year,
+                status=TimetableJob.Status.DONE,
+                created_by=request.user,
+                published=False,
+            )
+
+            entries_to_create = []
+            for entry in source_job.entries.select_related('classroom', 'subject', 'teacher', 'period', 'room'):
+                entries_to_create.append(TimetableEntry(
+                    tenant=tenant,
+                    job=target_job,
+                    classroom=entry.classroom,
+                    subject=entry.subject,
+                    teacher=entry.teacher,
+                    period=entry.period,
+                    room=entry.room,
+                    locked=entry.locked,
+                ))
+
+            if entries_to_create:
+                TimetableEntry.objects.bulk_create(entries_to_create, batch_size=500)
+
+            source_assignments = TeacherSubjectAssignment.objects.filter(
+                tenant=tenant,
+                term=source_term,
+                academic_year=source_year,
+            )
+            created_count = 0
+            for a in source_assignments:
+                _, was_created = TeacherSubjectAssignment.objects.get_or_create(
+                    tenant=tenant,
+                    teacher=a.teacher,
+                    subject=a.subject,
+                    classroom=a.classroom,
+                    term=target_term,
+                    academic_year=target_year,
+                )
+                if was_created:
+                    created_count += 1
+
+        return Response({
+            'job': TimetableJobSerializer(target_job, context={'request': request}).data,
+            'entries_copied': len(entries_to_create),
+            'assignments_created': created_count,
+        })
+
 
 class TimetableEntryViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = TimetableEntry.objects.select_related(
@@ -102,12 +181,6 @@ class TimetableEntryViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     permission_classes = [IsTimetableAdminOrReadOnly]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['job', 'classroom', 'teacher', 'subject', 'period', 'locked']
-    # A single job's entries are a bounded, known-size set — roughly
-    # (active classrooms) x (non-break periods per week). The admin grid and
-    # the read-only student/teacher/parent views all need the FULL set for a
-    # job to render correctly; paginating this silently truncated a 706-entry
-    # job down to the first page (20 rows), making a correctly-generated
-    # whole-week timetable look like it only covered Monday.
     pagination_class = None
 
     def get_serializer_class(self):
@@ -173,3 +246,234 @@ class TimetableEntryViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             entry.locked = locked
             entry.save(update_fields=['locked', 'updated_at'])
         return Response(TimetableEntrySerializer(entry, context={'request': request}).data)
+
+
+class TimetablePDFDownloadView(APIView):
+    permission_classes = [IsTimetableAdminOrReadOnly]
+
+    def get(self, request):
+        from ..models import Period
+
+        term = request.query_params.get('term')
+        academic_year = request.query_params.get('academic_year')
+        classroom_id = request.query_params.get('classroom')
+        teacher_id = request.query_params.get('teacher')
+
+        if not term or not academic_year:
+            return Response({'detail': 'term and academic_year are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            academic_year = int(academic_year)
+        except ValueError:
+            return Response({'detail': 'academic_year must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        tenant = request.user.tenant
+
+        if is_teacher(request.user):
+            if not teacher_id or int(teacher_id) != request.user.id:
+                raise PermissionDenied('You can only download your own timetable.')
+        if is_parent(request.user):
+            raise PermissionDenied('PDF download not available for parents.')
+
+        job = TimetableJob.objects.filter(
+            tenant=tenant,
+            term=term,
+            academic_year=academic_year,
+            status=TimetableJob.Status.DONE,
+        ).order_by('-created_at').first()
+
+        if not job:
+            return Response({'detail': 'No generated timetable found for this term.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not is_admin(request.user) and not job.published:
+            raise PermissionDenied('Timetable not yet published.')
+
+        entries = TimetableEntry.objects.filter(tenant=tenant, job=job)
+        if classroom_id:
+            entries = entries.filter(classroom_id=classroom_id)
+        if teacher_id:
+            entries = entries.filter(teacher_id=teacher_id)
+
+        if not entries.exists():
+            return Response({'detail': 'No entries found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if classroom_id:
+            classrooms_to_render = [entries.first().classroom]
+        else:
+            classrooms_to_render = list(
+                Classroom.objects.filter(
+                    id__in=entries.values_list('classroom_id', flat=True).distinct()
+                ).order_by('grade_level', 'name', 'stream')
+            )
+
+        response = HttpResponse(content_type='application/pdf')
+        filename = f'timetable_{term}_{academic_year}'
+        if classroom_id:
+            filename += f'_{classrooms_to_render[0].name or classrooms_to_render[0].id}'
+        if teacher_id:
+            teacher = entries.first().teacher
+            filename += f'_{teacher.get_full_name() or teacher.id}'
+        filename = filename.replace(' ', '_') + '.pdf'
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+        doc = SimpleDocTemplate(
+            response,
+            pagesize=landscape(A4),
+            rightMargin=1 * cm,
+            leftMargin=1 * cm,
+            topMargin=1 * cm,
+            bottomMargin=1 * cm,
+        )
+
+        elements = []
+        styles = getSampleStyleSheet()
+
+        title_style = ParagraphStyle(
+            'TimetableTitle',
+            parent=styles['Heading1'],
+            fontSize=16,
+            alignment=1,
+            spaceAfter=6,
+        )
+        subtitle_style = ParagraphStyle(
+            'TimetableSubtitle',
+            parent=styles['Normal'],
+            fontSize=10,
+            alignment=1,
+            spaceAfter=12,
+            textColor=colors.grey,
+        )
+        cell_style = ParagraphStyle(
+            'TimetableCell',
+            parent=styles['Normal'],
+            fontSize=8,
+            leading=10,
+            alignment=1,
+        )
+        day_style = ParagraphStyle(
+            'TimetableDay',
+            parent=styles['Normal'],
+            fontSize=9,
+            leading=11,
+            alignment=1,
+        )
+        period_header_style = ParagraphStyle(
+            'PeriodHeader',
+            parent=styles['Normal'],
+            fontSize=9,
+            leading=10,
+            alignment=1,
+        )
+
+        days = [(1, 'Monday'), (2, 'Tuesday'), (3, 'Wednesday'), (4, 'Thursday'), (5, 'Friday')]
+        page_width, _ = landscape(A4)
+        available_width = page_width - 2 * cm  # 1cm left + 1cm right margin
+
+        for idx, classroom in enumerate(classrooms_to_render):
+            if idx > 0:
+                elements.append(PageBreak())
+
+            cls_entries = entries.filter(classroom=classroom)
+
+            school_name = tenant.name or 'School'
+            elements.append(Paragraph(f'<b>{school_name}</b>', title_style))
+            elements.append(Paragraph(f'Timetable — {term} {academic_year}', subtitle_style))
+
+            header_text = f'<b>Class:</b> {classroom}'
+            if teacher_id:
+                teacher = cls_entries.first().teacher if cls_entries.exists() else None
+                if teacher:
+                    header_text += f' &nbsp;&nbsp; <b>Teacher:</b> {teacher.get_full_name() or teacher.email}'
+            elements.append(Paragraph(header_text, subtitle_style))
+            elements.append(Spacer(1, 0.2 * cm))
+
+            # ── FIX 1: Fetch periods with start/end times per classroom ──
+            schedule_templates = cls_entries.values_list('period__schedule_template', flat=True).distinct()
+            periods_qs = Period.objects.filter(
+                tenant=tenant,
+                schedule_template__in=schedule_templates,
+                is_break=False,
+            ).order_by('order')
+
+            # Deduplicate by order (safety net if multiple templates share an order)
+            seen_orders = set()
+            periods = []
+            for p in periods_qs:
+                if p.order not in seen_orders:
+                    seen_orders.add(p.order)
+                    periods.append(p)
+
+            period_orders = [p.order for p in periods]
+            if not period_orders:
+                period_orders = sorted(set(cls_entries.values_list('period__order', flat=True)))
+
+            # ── FIX 2: Dynamic column widths so table never overflows page ──
+            day_col_width = 2.2 * cm
+            period_col_width = (available_width - day_col_width) / max(len(period_orders), 1)
+            col_widths = [day_col_width] + [period_col_width] * len(period_orders)
+
+            # Shrink font slightly when there are many periods
+            if len(period_orders) > 8:
+                cell_style.fontSize = 7
+                cell_style.leading = 9
+
+            # ── FIX 3: Header now shows P# + time range ──
+            header = [Paragraph('<b>Day</b>', day_style)]
+            for period in periods:
+                start = getattr(period, 'start_time', None) or getattr(period, 'start', None)
+                end = getattr(period, 'end_time', None) or getattr(period, 'end', None)
+                time_str = ""
+                if start and end:
+                    time_str = f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+                header.append(Paragraph(
+                    f'<b>P{period.order}</b><br/><span fontSize="7" textColor="#6b7280">{time_str}</span>',
+                    period_header_style
+                ))
+            if not periods:
+                for o in period_orders:
+                    header.append(Paragraph(f'<b>P{o}</b>', period_header_style))
+
+            table_data = [header]
+
+            for day_num, day_name in days:
+                row = [Paragraph(f'<b>{day_name}</b>', day_style)]
+                for order in period_orders:
+                    cell_entries = cls_entries.filter(period__day_of_week=day_num, period__order=order)
+                    if cell_entries.exists():
+                        cell_texts = []
+                        for e in cell_entries:
+                            parts = [f'<b>{e.subject.name}</b>']
+                            if not teacher_id:
+                                parts.append(f'{e.teacher.get_full_name() or e.teacher.email}')
+                            if e.room:
+                                parts.append(f'Rm: {e.room.name}')
+                            cell_texts.append('<br/>'.join(parts))
+                        row.append(Paragraph('<br/><br/>'.join(cell_texts), cell_style))
+                    else:
+                        row.append(Paragraph('—', cell_style))
+                table_data.append(row)
+
+            table = Table(table_data, colWidths=col_widths, repeatRows=1)
+
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f3f4f6')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#374151')),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#d1d5db')),
+                ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('LEFTPADDING', (0, 0), (-1, -1), 3),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+                ('TOPPADDING', (0, 0), (-1, -1), 3),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ]))
+
+            elements.append(table)
+
+        doc.build(elements)
+        return response

@@ -7,7 +7,7 @@ from .setup import (
     TeacherSubjectAssignmentViewSet,
     TeacherWorkloadLimitViewSet,
 )
-from .timetable import ReadinessView, TimetableEntryViewSet, TimetableJobViewSet
+from .timetable import ReadinessView, TimetableEntryViewSet, TimetableJobViewSet, TimetablePDFDownloadView
 
 __all__ = [
     'PeriodViewSet',
@@ -20,5 +20,6 @@ __all__ = [
     'TeacherWorkloadLimitViewSet',
     'TimetableEntryViewSet',
     'TimetableJobViewSet',
+    'TimetablePDFDownloadView'
 ]
 

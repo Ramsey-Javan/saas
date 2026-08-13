@@ -9,6 +9,7 @@ from .setup import (
     TeacherWorkloadLimitSerializer,
 )
 from .timetable import (
+    CopyTimetableSerializer,
     PartialRegenerateSerializer,
     TimetableEntrySerializer,
     TimetableEntryUpdateSerializer,

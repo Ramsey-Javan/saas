@@ -61,3 +61,14 @@ class TimetableEntryUpdateSerializer(serializers.ModelSerializer):
 
 class PartialRegenerateSerializer(serializers.Serializer):
     class_stream_ids = serializers.ListField(child=serializers.IntegerField(), allow_empty=False)
+
+class CopyTimetableSerializer(serializers.Serializer):
+    source_term = serializers.ChoiceField(choices=TimetableJob._meta.get_field('term').choices)
+    source_academic_year = serializers.IntegerField(min_value=2000, max_value=2100)
+    target_term = serializers.ChoiceField(choices=TimetableJob._meta.get_field('term').choices)
+    target_academic_year = serializers.IntegerField(min_value=2000, max_value=2100)
+
+    def validate(self, attrs):
+        if attrs['source_term'] == attrs['target_term'] and attrs['source_academic_year'] == attrs['target_academic_year']:
+            raise serializers.ValidationError('Source and target term/year must be different.')
+        return attrs
