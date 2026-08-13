@@ -12,6 +12,7 @@ from .views import (
     TeacherWorkloadLimitViewSet,
     TimetableEntryViewSet,
     TimetableJobViewSet,
+    TimetablePDFDownloadView
 )
 
 router = DefaultRouter()
@@ -24,9 +25,11 @@ router.register('teacher-workload-limits', TeacherWorkloadLimitViewSet, basename
 router.register('teacher-subject-assignments', TeacherSubjectAssignmentViewSet, basename='teacher-subject-assignment')
 router.register('jobs', TimetableJobViewSet, basename='timetable-job')
 router.register('entries', TimetableEntryViewSet, basename='timetable-entry')
+# REMOVED: router.register('pdf-download', ...)
 
 urlpatterns = [
     path('readiness/', ReadinessView.as_view(), name='timetable-readiness'),
+    path('pdf/', TimetablePDFDownloadView.as_view(), name='timetable-pdf'),
     path('', include(router.urls)),
 ]
 

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   CalendarClock,
   CheckCircle2,
+  Copy,
+  Download,
   Eye,
   Grid3X3,
   Lock,
@@ -752,6 +754,8 @@ function AdminTimetablePage() {
   const [teachers, setTeachers] = useState([])
   const [classroomError, setClassroomError] = useState(null)
   const [actionError, setActionError] = useState(null)
+  const [copying, setCopying] = useState(false)
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
   const [assignments, setAssignments] = useState([])
   const [createModal, setCreateModal] = useState(null)
 
@@ -909,6 +913,59 @@ function AdminTimetablePage() {
     }
   }
 
+  const downloadPdf = async ({ classroom, teacher } = {}) => {
+    if (!latestJob || latestJob.status !== 'done') return
+    setDownloadingPdf(true)
+    setActionError(null)
+    try {
+      const params = {
+        term: filters.term,
+        academic_year: filters.academic_year,
+      }
+      if (classroom) params.classroom = classroom
+      if (teacher) params.teacher = teacher
+
+      const response = await timetablingApi.downloadTimetablePdf(params)
+      const blob = new Blob([response.data], { type: 'application/pdf' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      const suffix = classroom ? `_${classroom}` : teacher ? '_teacher' : '_master'
+      link.download = `timetable_${filters.term}_${filters.academic_year}${suffix}.pdf`
+      link.click()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      setActionError(extractApiError(err))
+    } finally {
+      setDownloadingPdf(false)
+    }
+  }
+
+  const getPreviousTerm = (term, year) => {
+    const map = { term1: ['term3', year - 1], term2: ['term1', year], term3: ['term2', year] }
+    return map[term] || [null, null]
+  }
+
+  const copyFromLastTerm = async () => {
+    const [prevTerm, prevYear] = getPreviousTerm(filters.term, Number(filters.academic_year))
+    if (!prevTerm) return
+    setCopying(true)
+    setActionError(null)
+    try {
+      await timetablingApi.copyFromTerm({
+        source_term: prevTerm,
+        source_academic_year: prevYear,
+        target_term: filters.term,
+        target_academic_year: Number(filters.academic_year),
+      })
+      await fetchData()
+    } catch (err) {
+      setActionError(extractApiError(err))
+    } finally {
+      setCopying(false)
+    }
+  }
+
   const publishJob = async () => {
     if (!latestJob) return
     setPublishing(true)
@@ -1008,6 +1065,14 @@ function AdminTimetablePage() {
               <Upload size={16} /> PDF
             </Button>
             <Button
+              variant="secondary"
+              onClick={copyFromLastTerm}
+              loading={copying}
+              disabled={jobInProgress || generating || copying}
+            >
+              <Copy size={16} /> Copy Last Term
+            </Button>
+            <Button
               onClick={generate}
               loading={generating}
               disabled={!readiness?.ready || jobInProgress}
@@ -1015,6 +1080,24 @@ function AdminTimetablePage() {
             >
               <Play size={16} /> Generate
             </Button>
+            <Button
+              variant="secondary"
+              onClick={() => downloadPdf()}
+              loading={downloadingPdf}
+              disabled={!latestJob || latestJob.status !== 'done' || jobInProgress}
+            >
+              <Download size={16} /> Master PDF
+            </Button>
+            {filters.classroom && (
+              <Button
+                variant="secondary"
+                onClick={() => downloadPdf({ classroom: filters.classroom })}
+                loading={downloadingPdf}
+                disabled={!latestJob || latestJob.status !== 'done' || jobInProgress}
+              >
+                <Download size={16} /> Class PDF
+              </Button>
+            )}
           </div>
         }
       />
@@ -1293,35 +1376,94 @@ function AdminTimetablePage() {
 }
 
 function ReadOnlyTimetablePage() {
+  const user = useAuthStore((state) => state.user)
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(true)
+  const [roFilters, setRoFilters] = useState({ term: 'term1', academic_year: thisYear() })
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
+
+  const fetchReadOnly = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data: jobData } = await timetablingApi.getJobs({
+        term: roFilters.term,
+        academic_year: roFilters.academic_year,
+      })
+      const jobs = listFromResponse(jobData)
+      const publishedJob = jobs.find((j) => j.status === 'done' && j.published)
+
+      if (publishedJob) {
+        const { data } = await timetablingApi.getEntries(
+          { job: publishedJob.id },
+          { skipErrorToast: true }
+        )
+        setEntries(listFromResponse(data))
+      } else {
+        setEntries([])
+      }
+    } catch {
+      setEntries([])
+    } finally {
+      setLoading(false)
+    }
+  }, [roFilters])
 
   useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    timetablingApi
-      .getEntries(undefined, { skipErrorToast: true })
-      .then(({ data }) => {
-        if (!cancelled) setEntries(listFromResponse(data))
+    fetchReadOnly()
+  }, [fetchReadOnly])
+
+  const downloadMyTimetable = async () => {
+    if (!user?.id) return
+    setDownloadingPdf(true)
+    try {
+      const response = await timetablingApi.downloadTimetablePdf({
+        term: roFilters.term,
+        academic_year: roFilters.academic_year,
+        teacher: user.id,
       })
-      .catch(() => {
-        if (!cancelled) setEntries([])
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
+      const blob = new Blob([response.data], { type: 'application/pdf' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `my_timetable_${roFilters.term}_${roFilters.academic_year}.pdf`
+      link.click()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setDownloadingPdf(false)
     }
-  }, [])
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader title="Timetable" />
       <Card className="p-4">
-        <p className="text-sm text-gray-600">
-          Your school timetable appears here once an admin generates it.
-        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <Select
+            label="Term"
+            value={roFilters.term}
+            onChange={(e) => setRoFilters((f) => ({ ...f, term: e.target.value }))}
+          >
+            {TERMS.map((t) => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </Select>
+          <Input
+            label="Academic Year"
+            type="number"
+            value={roFilters.academic_year}
+            onChange={(e) => setRoFilters((f) => ({ ...f, academic_year: e.target.value }))}
+          />
+          <Button
+            variant="secondary"
+            onClick={downloadMyTimetable}
+            loading={downloadingPdf}
+            disabled={!entries.length}
+          >
+            <Download size={16} /> Download My Timetable
+          </Button>
+        </div>
       </Card>
       <Card className="p-4">
         {loading ? (
