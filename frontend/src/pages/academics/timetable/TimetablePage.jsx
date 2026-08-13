@@ -779,12 +779,15 @@ function AdminTimetablePage() {
 
   const fetchReadiness = useCallback(async () => {
     try {
-      const { data } = await timetablingApi.getReadiness()
+      const { data } = await timetablingApi.getReadiness({
+        term: filters.term,
+        academic_year: filters.academic_year,
+      })
       setReadiness(data)
     } catch {
       setReadiness({ ready: false, errors: [{ message: 'Could not load readiness.' }], warnings: [] })
     }
-  }, [])
+  }, [filters.term, filters.academic_year])
 
   const loadClassrooms = useCallback(() => {
     let cancelled = false

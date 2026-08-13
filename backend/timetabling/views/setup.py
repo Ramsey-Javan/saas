@@ -1,3 +1,4 @@
+import django_filters
 from django.db import IntegrityError, transaction
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import serializers, status, viewsets
@@ -14,9 +15,9 @@ from ..models import (
     ScheduleTemplate,
     SubjectRule,
     TeacherAvailability,
-    TeacherSubjectAssignment,
     TeacherWorkloadLimit,
 )
+from ..models import TeacherSubjectAssignment
 from ..permissions import IsTimetableAdmin
 from ..serializers import (
     BulkTeacherSubjectAssignmentSerializer,
@@ -29,6 +30,15 @@ from ..serializers import (
     TeacherWorkloadLimitSerializer,
 )
 from .mixins import TenantScopedMixin
+
+
+class TeacherSubjectAssignmentFilter(django_filters.FilterSet):
+    term = django_filters.CharFilter(field_name='term', lookup_expr='exact')
+    academic_year = django_filters.NumberFilter(field_name='academic_year', lookup_expr='exact')
+
+    class Meta:
+        model = TeacherSubjectAssignment
+        fields = ['teacher', 'subject', 'classroom', 'term', 'academic_year']
 
 
 class AdminSetupViewSet(TenantScopedMixin, viewsets.ModelViewSet):
@@ -292,7 +302,7 @@ class TeacherSubjectAssignmentViewSet(AdminSetupViewSet):
     queryset = TeacherSubjectAssignment.objects.select_related('teacher', 'subject', 'classroom')
     serializer_class = TeacherSubjectAssignmentSerializer
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['teacher', 'subject', 'classroom']
+    filterset_class = TeacherSubjectAssignmentFilter
 
     @action(detail=False, methods=['post'], url_path='bulk')
     def bulk(self, request):
@@ -302,6 +312,8 @@ class TeacherSubjectAssignmentViewSet(AdminSetupViewSet):
         teacher_id = serializer.validated_data['teacher']
         subject_id = serializer.validated_data['subject']
         classroom_ids = serializer.validated_data['classrooms']
+        term = serializer.validated_data['term']
+        academic_year = serializer.validated_data['academic_year']
 
         if not Subject.objects.filter(id=subject_id, tenant=tenant).exists():
             return Response({'subject': 'Subject not found in this school.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -320,6 +332,8 @@ class TeacherSubjectAssignmentViewSet(AdminSetupViewSet):
                     teacher_id=teacher_id,
                     subject_id=subject_id,
                     classroom=classroom,
+                    term=term,
+                    academic_year=academic_year,
                 )
                 created += int(was_created)
         return Response({'created': created})

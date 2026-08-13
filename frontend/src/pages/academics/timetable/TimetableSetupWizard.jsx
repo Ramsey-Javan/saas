@@ -3,7 +3,7 @@ import { Clock, DoorOpen, BookOpen, Users, CheckCircle2 } from 'lucide-react'
 import { academicsApi } from '@/api/academics'
 import { studentsApi } from '@/api/students'
 import { timetablingApi } from '@/api/timetabling'
-import { Spinner } from '@/components/ui'
+import { Spinner, Select } from '@/components/ui'
 import { listFromResponse } from '../shared'
 import api from '@/api/client'
 import StepIndicator from './components/StepIndicator'
@@ -21,6 +21,12 @@ const STEPS = [
   { id: 5, title: 'Review', icon: CheckCircle2, description: 'Check readiness' },
 ]
 
+const TERM_OPTIONS = [
+  { value: 'term1', label: 'Term 1' },
+  { value: 'term2', label: 'Term 2' },
+  { value: 'term3', label: 'Term 3' },
+]
+
 export default function TimetableSetupWizard({ onComplete }) {
   const [step, setStep] = useState(1)
   const [loading, setLoading] = useState(true)
@@ -35,7 +41,13 @@ export default function TimetableSetupWizard({ onComplete }) {
   const [teacherAssignments, setTeacherAssignments] = useState([])
   const [readiness, setReadiness] = useState(null)
 
-  const loadAll = useCallback(async () => {
+  // Which term this whole wizard session is configuring. Bell schedules, rooms,
+  // and subject rules are tenant-wide (reused term to term), but teacher
+  // assignments are scoped to a specific term — see TeacherSubjectAssignment.
+  const [term, setTerm] = useState('term1')
+  const [academicYear, setAcademicYear] = useState(new Date().getFullYear())
+
+  const loadAll = useCallback(async (activeTerm, activeYear) => {
     setLoading(true)
     try {
       const [subRes, classRes, userRes, tempRes, roomRes, ruleRes, assignRes, periodRes] = await Promise.all([
@@ -45,7 +57,7 @@ export default function TimetableSetupWizard({ onComplete }) {
         timetablingApi.getScheduleTemplates({}),
         timetablingApi.getRooms({}),
         timetablingApi.getSubjectRules({}),
-        timetablingApi.getTeacherAssignments({}),
+        timetablingApi.getTeacherAssignments({ term: activeTerm, academic_year: activeYear }),
         timetablingApi.getPeriods({}),
       ])
       setSubjects(listFromResponse(subRes.data))
@@ -61,9 +73,27 @@ export default function TimetableSetupWizard({ onComplete }) {
     }
   }, [])
 
+  // Only teacherAssignments are term-scoped, so switching term/year mid-session
+  // just re-fetches that one list rather than reloading everything.
+  const reloadTeacherAssignments = useCallback(async (activeTerm, activeYear) => {
+    const { data } = await timetablingApi.getTeacherAssignments({ term: activeTerm, academic_year: activeYear })
+    setTeacherAssignments(listFromResponse(data))
+  }, [])
+
   useEffect(() => {
-    loadAll()
-  }, [loadAll])
+    loadAll(term, academicYear)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handleTermChange = (nextTerm) => {
+    setTerm(nextTerm)
+    reloadTeacherAssignments(nextTerm, academicYear)
+  }
+
+  const handleYearChange = (nextYear) => {
+    setAcademicYear(nextYear)
+    reloadTeacherAssignments(term, nextYear)
+  }
 
   if (loading) {
     return (
@@ -81,6 +111,28 @@ export default function TimetableSetupWizard({ onComplete }) {
         <p className="mt-1 text-sm text-gray-500">
           Configure your bell schedule, rooms, subjects, and teacher assignments before generating.
         </p>
+      </div>
+
+      <div className="mx-auto flex max-w-xs items-center justify-center gap-3 rounded-lg border border-gray-100 bg-gray-50 px-4 py-2.5">
+        <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Configuring</span>
+        <Select
+          className="w-32"
+          value={term}
+          onChange={(e) => handleTermChange(e.target.value)}
+        >
+          {TERM_OPTIONS.map((t) => (
+            <option key={t.value} value={t.value}>{t.label}</option>
+          ))}
+        </Select>
+        <Select
+          className="w-24"
+          value={academicYear}
+          onChange={(e) => handleYearChange(parseInt(e.target.value, 10))}
+        >
+          {[academicYear - 1, academicYear, academicYear + 1].map((y) => (
+            <option key={y} value={y}>{y}</option>
+          ))}
+        </Select>
       </div>
 
       <StepIndicator current={step} steps={STEPS} />
@@ -126,6 +178,8 @@ export default function TimetableSetupWizard({ onComplete }) {
           teacherAssignments={teacherAssignments}
           setTeacherAssignments={setTeacherAssignments}
           subjectRules={subjectRules}
+          term={term}
+          academicYear={academicYear}
           onBack={() => setStep(3)}
           onNext={() => setStep(5)}
         />
@@ -135,6 +189,8 @@ export default function TimetableSetupWizard({ onComplete }) {
         <ReviewStep
           readiness={readiness}
           setReadiness={setReadiness}
+          term={term}
+          academicYear={academicYear}
           onBack={() => setStep(4)}
           onComplete={onComplete}
         />

@@ -104,13 +104,15 @@ def solve_timetable_job(
         TeacherSubjectAssignment.objects.filter(
             tenant=tenant,
             classroom__in=classrooms,
+            term=job.term,
+            academic_year=job.academic_year,
         ).select_related('teacher', 'subject', 'classroom')
     )
 
     if not assignments:
         raise TimetableSolveError(
-            'No teacher-subject-classroom assignments found. '
-            'Assign teachers to classes in the Timetable Setup wizard.'
+            f'No teacher-subject-classroom assignments found for {job.term} {job.academic_year}. '
+            'Assign teachers to classes for this term in the Timetable Setup wizard.'
         )
 
     # ---- Pre-validation: teacher workload vs limits ----

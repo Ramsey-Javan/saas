@@ -157,6 +157,11 @@ class TeacherWorkloadLimit(TenantModel):
 
 
 class TeacherSubjectAssignment(TenantModel):
+    class Term(models.TextChoices):
+        TERM_1 = 'term1', 'Term 1'
+        TERM_2 = 'term2', 'Term 2'
+        TERM_3 = 'term3', 'Term 3'
+
     teacher = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -165,10 +170,16 @@ class TeacherSubjectAssignment(TenantModel):
     )
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='timetable_assignments')
     classroom = models.ForeignKey('students.Classroom', on_delete=models.CASCADE, related_name='timetable_assignments')
+    # Scopes an assignment to a specific term/year so the same teacher can be
+    # re-assigned differently next term without deleting history, and so a
+    # future "carry forward from last term" pre-fill has real rows to read.
+    term = models.CharField(max_length=10, choices=Term.choices)
+    academic_year = models.PositiveSmallIntegerField()
 
     class Meta:
-        ordering = ['classroom__name', 'subject__name']
-        unique_together = ['tenant', 'teacher', 'subject', 'classroom']
+        ordering = ['-academic_year', 'term', 'classroom__name', 'subject__name']
+        unique_together = ['tenant', 'teacher', 'subject', 'classroom', 'term', 'academic_year']
 
     def __str__(self):
-        return f'{self.teacher} - {self.subject} - {self.classroom}'
+        return f'{self.teacher} - {self.subject} - {self.classroom} ({self.term} {self.academic_year})'
+    

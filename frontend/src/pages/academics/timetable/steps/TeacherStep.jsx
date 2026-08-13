@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, ChevronLeft, ChevronRight, Grid3X3, ListPlus, Plus, Trash2 } from 'lucide-react'
 import { Button, Card, Select } from '@/components/ui'
 import { timetablingApi } from '@/api/timetabling'
 import api from '@/api/client'
 import AssignmentFilterBar from '../components/AssignmentFilterBar'
+import AssignmentMatrix from '../components/AssignmentMatrix'
+import { buildRuleLookup } from '../AssignmentRules'
 
 const PHASE_GRADES = {
   pp: [],
@@ -14,6 +16,8 @@ const PHASE_GRADES = {
   all: [],
 }
 
+const TERM_LABELS = { term1: 'Term 1', term2: 'Term 2', term3: 'Term 3' }
+
 function extractErrorMessage(err, fallback) {
   const data = err?.response?.data
   if (!data) return err?.message || fallback
@@ -23,31 +27,6 @@ function extractErrorMessage(err, fallback) {
   if (Array.isArray(firstValue)) return firstValue[0]
   if (typeof firstValue === 'string') return firstValue
   return fallback
-}
-
-// Same stream-aware matching as timetabling/services/solver.py and
-// timetabling/services/readiness.py: an exact grade+stream rule wins over a
-// blank-stream (whole-grade) fallback rule. Keeping these in sync matters —
-// this is what makes the live load numbers shown here match what Readiness
-// and the solver will actually see.
-function buildRuleLookup(subjectRules) {
-  const exact = new Map()
-  const fallback = new Map()
-  subjectRules.forEach((r) => {
-    const subjectId = typeof r.subject === 'object' ? r.subject.id : r.subject
-    if (r.stream) {
-      exact.set(`${r.grade_band}|${r.stream}|${subjectId}`, r)
-    } else {
-      fallback.set(`${r.grade_band}|${subjectId}`, r)
-    }
-  })
-  return (classroom, subjectId) => {
-    if (!classroom) return null
-    const exactKey = `${classroom.grade_level}|${classroom.stream || ''}|${subjectId}`
-    if (exact.has(exactKey)) return exact.get(exactKey)
-    const fallbackKey = `${classroom.grade_level}|${subjectId}`
-    return fallback.get(fallbackKey) || null
-  }
 }
 
 function minSupplyFor(templateIds, templateSupply) {
@@ -63,10 +42,13 @@ export default function TeachersStep({
   teacherAssignments,
   setTeacherAssignments,
   subjectRules,
+  term,
+  academicYear,
   onBack,
   onNext,
 }) {
   const [saving, setSaving] = useState(false)
+  const [viewTab, setViewTab] = useState('grid')
   const [form, setForm] = useState({ classroom: '', subject: '', teacher: '' })
   const [filters, setFilters] = useState({ teacher: '', subject: '', classroom: '', grade: '' })
   const [formError, setFormError] = useState('')
@@ -161,8 +143,10 @@ export default function TeachersStep({
         teacher: parseInt(teacher),
         subject: parseInt(subject),
         classrooms: [parseInt(classroom)],
+        term,
+        academic_year: academicYear,
       })
-      const { data } = await timetablingApi.getTeacherAssignments({})
+      const { data } = await timetablingApi.getTeacherAssignments({ term, academic_year: academicYear })
       setTeacherAssignments(data.results || data)
       setForm({ classroom: '', subject: '', teacher: '' })
     } catch (err) {
@@ -226,16 +210,62 @@ export default function TeachersStep({
   return (
     <div className="space-y-6">
       <Card className="p-5">
-        <h3 className="mb-1 text-base font-semibold text-gray-900">Assign Teachers</h3>
-        <p className="mb-4 text-sm text-gray-500">
-          Pick a classroom first, then a subject, then the teacher.
-        </p>
+        <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">Assign Teachers</h3>
+            <p className="mt-1 text-xs text-gray-400">
+              For {TERM_LABELS[term] || 'this term'} {academicYear} — change the term/year above to see or edit a different one.
+            </p>
+          </div>
+          <div className="flex overflow-hidden rounded-md border border-gray-200">
+            <button
+              type="button"
+              onClick={() => setViewTab('grid')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium ${
+                viewTab === 'grid' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <Grid3X3 size={14} /> Grid
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewTab('quick')}
+              className={`flex items-center gap-1.5 border-l border-gray-200 px-3 py-1.5 text-sm font-medium ${
+                viewTab === 'quick' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <ListPlus size={14} /> Quick Add
+            </button>
+          </div>
+        </div>
 
         {formError && (
-          <p className="mb-4 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="mb-4 mt-3 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
             {formError}
           </p>
         )}
+
+        {viewTab === 'grid' && (
+          <div className="mt-4">
+            <AssignmentMatrix
+              teachers={teachers}
+              subjects={subjects}
+              classrooms={classrooms}
+              subjectRules={subjectRules}
+              teacherAssignments={teacherAssignments}
+              setTeacherAssignments={setTeacherAssignments}
+              term={term}
+              academicYear={academicYear}
+              onError={setFormError}
+            />
+          </div>
+        )}
+
+        {viewTab === 'quick' && (
+          <>
+        <p className="mb-4 mt-3 text-sm text-gray-500">
+          Pick a classroom first, then a subject, then the teacher.
+        </p>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div>
@@ -325,6 +355,8 @@ export default function TeachersStep({
             <Plus size={16} className="mr-1" /> Add Assignment
           </Button>
         </div>
+        </>
+        )}
       </Card>
 
       {teacherLoadOverview.length > 0 && (
