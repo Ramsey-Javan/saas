@@ -3,13 +3,15 @@ import { ChevronLeft, ChevronRight, CheckCircle2, AlertCircle, XCircle } from 'l
 import { Button, Card, Spinner } from '@/components/ui'
 import { timetablingApi } from '@/api/timetabling'
 
-export default function ReviewStep({ readiness, setReadiness, onBack, onComplete }) {
+const TERM_LABELS = { term1: 'Term 1', term2: 'Term 2', term3: 'Term 3' }
+
+export default function ReviewStep({ readiness, setReadiness, term, academicYear, onBack, onComplete }) {
   const [saving, setSaving] = useState(false)
 
   const runReadiness = async () => {
     setSaving(true)
     try {
-      const { data } = await timetablingApi.getReadiness()
+      const { data } = await timetablingApi.getReadiness({ term, academic_year: academicYear })
       setReadiness(data)
     } finally {
       setSaving(false)
@@ -20,7 +22,12 @@ export default function ReviewStep({ readiness, setReadiness, onBack, onComplete
     <div className="space-y-6">
       <Card className="p-5">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-base font-semibold text-gray-900">Readiness Check</h3>
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">Readiness Check</h3>
+            <p className="text-xs text-gray-400">
+              For {TERM_LABELS[term] || 'this term'} {academicYear}
+            </p>
+          </div>
           <Button size="sm" variant="secondary" onClick={runReadiness} loading={saving}>
             Run Check
           </Button>

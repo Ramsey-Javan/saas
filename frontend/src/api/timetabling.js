@@ -1,7 +1,7 @@
 import api from './client'
 
 export const timetablingApi = {
-  getReadiness: () => api.get('/timetabling/readiness/'),
+  getReadiness: (params) => api.get('/timetabling/readiness/', { params }),
   getScheduleTemplates: (params) => api.get('/timetabling/schedule-templates/', { params }),
   createScheduleTemplate: (data) => api.post('/timetabling/schedule-templates/', data),
   updateScheduleTemplate: (id, data) => api.patch(`/timetabling/schedule-templates/${id}/`, data),

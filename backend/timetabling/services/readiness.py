@@ -34,7 +34,7 @@ def _build_rule_lookup(rules):
     return rule_for
 
 
-def check_timetable_readiness(tenant):
+def check_timetable_readiness(tenant, term, academic_year):
     errors = []
     warnings = []
 
@@ -51,7 +51,9 @@ def check_timetable_readiness(tenant):
     rule_for = _build_rule_lookup(rules)
 
     assignments_qs = list(
-        TeacherSubjectAssignment.objects.filter(tenant=tenant).select_related('teacher', 'subject', 'classroom')
+        TeacherSubjectAssignment.objects.filter(
+            tenant=tenant, term=term, academic_year=academic_year,
+        ).select_related('teacher', 'subject', 'classroom')
     )
     assignment_pairs = {(a.classroom_id, a.subject_id) for a in assignments_qs}
 
@@ -182,9 +184,9 @@ def check_timetable_readiness(tenant):
                 'message': f'{classroom} needs {demand} periods/week total but its bell schedule only has {supply} non-break slots. Add more periods or reduce subject periods/week.',
             })
 
-        return {
-            'ready': len(errors) == 0,
-            'errors': errors,
-            'warnings': warnings,
-            'has_subject_rules': SubjectRule.objects.filter(tenant=tenant, is_active=True).exists(),
-        }
+    return {
+        'ready': len(errors) == 0,
+        'errors': errors,
+        'warnings': warnings,
+        'has_subject_rules': SubjectRule.objects.filter(tenant=tenant, is_active=True).exists(),
+    }

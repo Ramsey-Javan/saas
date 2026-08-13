@@ -80,12 +80,13 @@ class TeacherSubjectAssignmentSerializer(serializers.ModelSerializer):
     teacher_name = serializers.SerializerMethodField()
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     classroom_name = serializers.SerializerMethodField()
+    term_label = serializers.CharField(source='get_term_display', read_only=True)
 
     class Meta:
         model = TeacherSubjectAssignment
         fields = [
             'id', 'teacher', 'teacher_name', 'subject', 'subject_name',
-            'classroom', 'classroom_name',
+            'classroom', 'classroom_name', 'term', 'term_label', 'academic_year',
         ]
 
     def get_teacher_name(self, obj):
@@ -99,4 +100,5 @@ class BulkTeacherSubjectAssignmentSerializer(serializers.Serializer):
     teacher = serializers.IntegerField()
     subject = serializers.IntegerField()
     classrooms = serializers.ListField(child=serializers.IntegerField(), allow_empty=False)
-    
+    term = serializers.ChoiceField(choices=TeacherSubjectAssignment.Term.choices)
+    academic_year = serializers.IntegerField(min_value=2000, max_value=2100)

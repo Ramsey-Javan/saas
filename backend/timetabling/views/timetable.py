@@ -27,7 +27,21 @@ class ReadinessView(APIView):
     permission_classes = [IsTimetableAdmin]
 
     def get(self, request):
-        return Response(check_timetable_readiness(request.user.tenant))
+        term = request.query_params.get('term')
+        academic_year = request.query_params.get('academic_year')
+        if not term or not academic_year:
+            return Response(
+                {'detail': 'term and academic_year query params are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            academic_year = int(academic_year)
+        except ValueError:
+            return Response(
+                {'detail': 'academic_year must be an integer.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(check_timetable_readiness(request.user.tenant, term, academic_year))
 
 
 class TimetableJobViewSet(TenantScopedMixin, viewsets.ModelViewSet):
@@ -42,7 +56,14 @@ class TimetableJobViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     pagination_class = None
 
     def create(self, request, *args, **kwargs):
-        readiness = check_timetable_readiness(request.user.tenant)
+        term = request.data.get('term')
+        academic_year = request.data.get('academic_year')
+        if not term or not academic_year:
+            return Response(
+                {'detail': 'term and academic_year are required to generate a timetable.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        readiness = check_timetable_readiness(request.user.tenant, term, academic_year)
         if not readiness['ready']:
             return Response(readiness, status=status.HTTP_400_BAD_REQUEST)
         serializer = self.get_serializer(data=request.data)
