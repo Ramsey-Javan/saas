@@ -1,6 +1,8 @@
 from django.db import transaction
+from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
+import django_filters
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -14,6 +16,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from accounts.models import CustomUser
 from students.models import Classroom, Student
 
 from ..models import TeacherSubjectAssignment, TimetableEntry, TimetableJob
@@ -32,7 +35,7 @@ from .mixins import TenantScopedMixin
 
 
 class ReadinessView(APIView):
-    permission_classes = [IsTimetableAdmin]
+    permission_classes = [IsTimetableAdminOrReadOnly]
 
     def get(self, request):
         term = request.query_params.get('term')
@@ -55,10 +58,20 @@ class ReadinessView(APIView):
 class TimetableJobViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = TimetableJob.objects.select_related('created_by').order_by('-created_at')
     serializer_class = TimetableJobSerializer
-    permission_classes = [IsTimetableAdmin]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['term', 'academic_year', 'status']
     pagination_class = None
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [IsTimetableAdminOrReadOnly()]
+        return [IsTimetableAdmin()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not is_admin(self.request.user):
+            qs = qs.filter(published=True)
+        return qs
 
     def create(self, request, *args, **kwargs):
         term = request.data.get('term')
@@ -174,13 +187,52 @@ class TimetableJobViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         })
 
 
+class TimetableEntryFilter(django_filters.FilterSet):
+    teacher = django_filters.CharFilter(method='filter_teacher')
+
+    class Meta:
+        model = TimetableEntry
+        fields = ['job', 'classroom', 'subject', 'period', 'locked']
+
+    def filter_teacher(self, queryset, name, value):
+        """
+        Accepts either a numeric user PK or an employee ID string
+        (e.g. EMP/2026/0001).
+        """
+        q = Q()
+
+        for field in ('employee_id', 'staff_id', 'username', 'email'):
+            if hasattr(CustomUser, field):
+                q |= Q(**{field: value})
+
+        try:
+            from accounts.models import StaffProfile
+            sp_q = Q()
+            for field in ('employee_id', 'staff_id'):
+                if hasattr(StaffProfile, field):
+                    sp_q |= Q(**{field: value})
+            if value.isdigit():
+                sp_q |= Q(user_id=int(value))
+            if sp_q.children:
+                staff_user_ids = StaffProfile.objects.filter(sp_q).values_list('user_id', flat=True)
+                q |= Q(pk__in=staff_user_ids)
+        except ImportError:
+            pass
+
+        if value.isdigit():
+            q |= Q(pk=int(value))
+
+        user_ids = CustomUser.objects.filter(q).values_list('id', flat=True)
+        return queryset.filter(teacher_id__in=user_ids)
+
+
 class TimetableEntryViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = TimetableEntry.objects.select_related(
         'job', 'classroom', 'subject', 'teacher', 'period', 'period__schedule_template', 'room',
     )
     permission_classes = [IsTimetableAdminOrReadOnly]
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['job', 'classroom', 'teacher', 'subject', 'period', 'locked']
+    filterset_class = TimetableEntryFilter
     pagination_class = None
 
     def get_serializer_class(self):
@@ -188,13 +240,46 @@ class TimetableEntryViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             return TimetableEntryUpdateSerializer
         return TimetableEntrySerializer
 
+    # ── NEW: helper to check class-teacher rights ──
+    def _is_class_teacher(self, user, classroom):
+        for field in ('class_teacher', 'stream_teacher', 'form_teacher'):
+            if hasattr(classroom, field) and getattr(classroom, field) == user:
+                return True
+        return False
+
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
+        classroom_id = self.request.query_params.get('classroom')
+
+        # Non-admins only see published timetables
         if not is_admin(user):
             qs = qs.filter(job__published=True)
+
         if is_teacher(user):
-            qs = qs.filter(teacher=user)
+            if classroom_id:
+                # ── CLASS-TEACHER MODE ──
+                # Teacher asked for a specific class.
+                # Allow it ONLY if they are the class teacher.
+                try:
+                    classroom = Classroom.objects.get(
+                        id=classroom_id,
+                        tenant=user.tenant,
+                    )
+                except Classroom.DoesNotExist:
+                    # Class doesn't exist → empty result
+                    return qs.none()
+
+                if self._is_class_teacher(user, classroom):
+                    # Return the full timetable for this class
+                    qs = qs.filter(classroom=classroom)
+                else:
+                    # Not their class → fall back to their own periods only
+                    qs = qs.filter(teacher=user)
+            else:
+                # ── DEFAULT: MY TEACHING SCHEDULE ──
+                qs = qs.filter(teacher=user)
+
         if is_parent(user):
             classroom_ids = Student.objects.filter(
                 tenant=user.tenant,
@@ -202,7 +287,30 @@ class TimetableEntryViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 is_active=True,
             ).values_list('classroom_id', flat=True)
             qs = qs.filter(classroom_id__in=classroom_ids)
+
         return qs
+
+    @action(detail=False, methods=['get'], url_path='my-classes')
+    def my_classes(self, request):
+        """
+        Returns the list of classrooms where the current teacher
+        is a class teacher (for the frontend dropdown).
+        """
+        user = request.user
+        if not is_teacher(user):
+            return Response([])
+
+        q = Q()
+        for field in ('class_teacher', 'stream_teacher', 'form_teacher'):
+            if hasattr(Classroom, field):
+                q |= Q(**{field: user})
+
+        if not q.children:
+            return Response([])
+
+        classrooms = Classroom.objects.filter(q, tenant=user.tenant).order_by('grade_level', 'name', 'stream')
+        data = [{'id': c.id, 'name': str(c)} for c in classrooms]
+        return Response(data)
 
     def perform_update(self, serializer):
         if not is_admin(self.request.user):
@@ -270,8 +378,15 @@ class TimetablePDFDownloadView(APIView):
         tenant = request.user.tenant
 
         if is_teacher(request.user):
-            if not teacher_id or int(teacher_id) != request.user.id:
-                raise PermissionDenied('You can only download your own timetable.')
+            if teacher_id:
+                try:
+                    if int(teacher_id) != request.user.id:
+                        raise PermissionDenied('You can only download your own timetable.')
+                except ValueError:
+                    raise PermissionDenied('Invalid teacher_id.')
+            else:
+                teacher_id = str(request.user.id)
+
         if is_parent(request.user):
             raise PermissionDenied('PDF download not available for parents.')
 
@@ -387,7 +502,7 @@ class TimetablePDFDownloadView(APIView):
             elements.append(Paragraph(header_text, subtitle_style))
             elements.append(Spacer(1, 0.2 * cm))
 
-            # ── FIX 1: Fetch periods with start/end times per classroom ──
+            # Fetch periods with start/end times per classroom
             schedule_templates = cls_entries.values_list('period__schedule_template', flat=True).distinct()
             periods_qs = Period.objects.filter(
                 tenant=tenant,
@@ -407,7 +522,7 @@ class TimetablePDFDownloadView(APIView):
             if not period_orders:
                 period_orders = sorted(set(cls_entries.values_list('period__order', flat=True)))
 
-            # ── FIX 2: Dynamic column widths so table never overflows page ──
+            # Dynamic column widths so table never overflows page
             day_col_width = 2.2 * cm
             period_col_width = (available_width - day_col_width) / max(len(period_orders), 1)
             col_widths = [day_col_width] + [period_col_width] * len(period_orders)
@@ -417,7 +532,7 @@ class TimetablePDFDownloadView(APIView):
                 cell_style.fontSize = 7
                 cell_style.leading = 9
 
-            # ── FIX 3: Header now shows P# + time range ──
+            # Header now shows P# + time range
             header = [Paragraph('<b>Day</b>', day_style)]
             for period in periods:
                 start = getattr(period, 'start_time', None) or getattr(period, 'start', None)

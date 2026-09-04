@@ -27,6 +27,7 @@ export const timetablingApi = {
   getJob: (id) => api.get(`/timetabling/jobs/${id}/`),
   regeneratePartial: (id, classStreamIds) => api.post(`/timetabling/jobs/${id}/regenerate-partial/`, { class_stream_ids: classStreamIds }),
   getEntries: (params, { skipErrorToast = false } = {}) => api.get('/timetabling/entries/', { params, skipErrorToast }),
+  getMyClasses: () => api.get('/timetabling/entries/my-classes/'),
   updateEntry: (id, data) => api.patch(`/timetabling/entries/${id}/`, data),
   lockEntry: (id, locked) => api.post(`/timetabling/entries/${id}/lock/`, { locked }),
   publishJob: (id) => api.post(`/timetabling/jobs/${id}/publish/`),

@@ -1381,6 +1381,28 @@ function ReadOnlyTimetablePage() {
   const [loading, setLoading] = useState(true)
   const [roFilters, setRoFilters] = useState({ term: 'term1', academic_year: thisYear() })
   const [downloadingPdf, setDownloadingPdf] = useState(false)
+  const [myClasses, setMyClasses] = useState([])
+  const [selectedClassroom, setSelectedClassroom] = useState('') // '' = "My Teaching Schedule"
+  const [jobFound, setJobFound] = useState(false)
+
+  // Class-teacher classes only exist for the 'teacher' role — skip the call otherwise.
+  useEffect(() => {
+    if (user?.role !== 'teacher') return
+    timetablingApi
+      .getMyClasses()
+      .then(({ data }) => setMyClasses(listFromResponse(data)))
+      .catch(() => setMyClasses([]))
+  }, [user?.role])
+
+  // Auto-pick the first class when the teacher has no personal schedule in the current view.
+  useEffect(() => {
+    if (!jobFound || loading) return
+    if (selectedClassroom) return // user already picked something, don't override
+    if (entries.length === 0 && myClasses.length > 0) {
+      setSelectedClassroom(String(myClasses[0].id))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobFound, loading, entries.length, myClasses])
 
   const fetchReadOnly = useCallback(async () => {
     setLoading(true)
@@ -1393,12 +1415,13 @@ function ReadOnlyTimetablePage() {
       const publishedJob = jobs.find((j) => j.status === 'done' && j.published)
 
       if (publishedJob) {
-        const { data } = await timetablingApi.getEntries(
-          { job: publishedJob.id },
-          { skipErrorToast: true }
-        )
+        setJobFound(true)
+        const params = { job: publishedJob.id }
+        if (selectedClassroom) params.classroom = selectedClassroom
+        const { data } = await timetablingApi.getEntries(params, { skipErrorToast: true })
         setEntries(listFromResponse(data))
       } else {
+        setJobFound(false)
         setEntries([])
       }
     } catch {
@@ -1406,7 +1429,7 @@ function ReadOnlyTimetablePage() {
     } finally {
       setLoading(false)
     }
-  }, [roFilters])
+  }, [roFilters, selectedClassroom])
 
   useEffect(() => {
     fetchReadOnly()
@@ -1435,6 +1458,22 @@ function ReadOnlyTimetablePage() {
     }
   }
 
+  // Distinguish "nothing generated at all" from "generated, but nothing for this view" —
+  // these used to render the same misleading message.
+  const emptyState = !jobFound
+    ? READ_ONLY_EMPTY
+    : selectedClassroom
+      ? {
+          title: 'No entries for this class yet',
+          description: 'This class may not have any lessons scheduled in the published timetable.',
+        }
+      : {
+          title: "You don't have any periods this term",
+          description: myClasses.length
+            ? 'Switch to one of your classes above to see its full schedule.'
+            : "You have no periods in this term's published timetable yet.",
+        }
+
   return (
     <div className="space-y-6">
       <PageHeader title="Timetable" />
@@ -1455,6 +1494,19 @@ function ReadOnlyTimetablePage() {
             value={roFilters.academic_year}
             onChange={(e) => setRoFilters((f) => ({ ...f, academic_year: e.target.value }))}
           />
+          {myClasses.length > 0 && (
+            <Select
+              label="Viewing"
+              value={selectedClassroom}
+              onChange={(e) => setSelectedClassroom(e.target.value)}
+              className="w-56"
+            >
+              <option value="">My Teaching Schedule</option>
+              {myClasses.map((c) => (
+                <option key={c.id} value={c.id}>{c.name} (my class)</option>
+              ))}
+            </Select>
+          )}
           <Button
             variant="secondary"
             onClick={downloadMyTimetable}
@@ -1482,8 +1534,8 @@ function ReadOnlyTimetablePage() {
         ) : (
           <EmptyState
             icon={CalendarClock}
-            title={READ_ONLY_EMPTY.title}
-            description={READ_ONLY_EMPTY.description}
+            title={emptyState.title}
+            description={emptyState.description}
           />
         )}
       </Card>
