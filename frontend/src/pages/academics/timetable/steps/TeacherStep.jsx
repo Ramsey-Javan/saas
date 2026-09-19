@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { AlertTriangle, ChevronLeft, ChevronRight, Grid3X3, ListPlus, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Grid3X3, ListPlus, Plus, Trash2, CopyPlus, X } from 'lucide-react'
 import { Button, Card, Select } from '@/components/ui'
 import { timetablingApi } from '@/api/timetabling'
 import api from '@/api/client'
@@ -17,6 +17,13 @@ const PHASE_GRADES = {
 }
 
 const TERM_LABELS = { term1: 'Term 1', term2: 'Term 2', term3: 'Term 3' }
+const TERM_ORDER = { term1: 1, term2: 2, term3: 3 }
+
+// How many rows each "Show more / Show less" list reveals per step. Only
+// this many DOM rows are ever rendered at once, so the page stays fast no
+// matter how many assignments a school has — the rest of the data is already
+// in memory and sliced, not re-fetched.
+const PAGE_SIZE = 10
 
 function extractErrorMessage(err, fallback) {
   const data = err?.response?.data
@@ -52,6 +59,22 @@ export default function TeachersStep({
   const [form, setForm] = useState({ classroom: '', subject: '', teacher: '' })
   const [filters, setFilters] = useState({ teacher: '', subject: '', classroom: '', grade: '' })
   const [formError, setFormError] = useState('')
+
+  // How many rows are currently rendered in each long list. Reset to
+  // PAGE_SIZE whenever the term/year or the active filters change, so a
+  // stale "expanded" state doesn't linger across different views of the data.
+  const [visibleAssignmentsCount, setVisibleAssignmentsCount] = useState(PAGE_SIZE)
+  const [visibleLoadsCount, setVisibleLoadsCount] = useState(PAGE_SIZE)
+
+  // --- Resume-previous-term banner state ---
+  // priorGroup holds the most recent (term, academic_year) combo, other than
+  // the one currently being configured, that has any TeacherSubjectAssignment
+  // rows for this tenant. Only shown when the CURRENT term/year has zero
+  // assignments, so it never nags once the admin has started filling it in.
+  const [priorGroup, setPriorGroup] = useState(null)
+  const [bannerDismissed, setBannerDismissed] = useState(false)
+  const [checkingPrior, setCheckingPrior] = useState(false)
+  const [copyingPrior, setCopyingPrior] = useState(false)
 
   const selectedClassroom = classrooms.find((c) => String(c.id) === String(form.classroom))
   const ruleFor = useMemo(() => buildRuleLookup(subjectRules), [subjectRules])
@@ -133,6 +156,98 @@ export default function TeachersStep({
     })
   }, [selectedClassroom, subjects])
 
+  // Whenever the configured term/year changes, collapse both lists back to
+  // the first page — the data they show belongs to a different term now.
+  useEffect(() => {
+    setVisibleAssignmentsCount(PAGE_SIZE)
+    setVisibleLoadsCount(PAGE_SIZE)
+  }, [term, academicYear])
+
+  // Whenever the configured term/year changes, or the current term's
+  // assignment list changes, re-check whether a "resume from prior term"
+  // banner should be offered. Only fires the lookup when the current
+  // term/year genuinely has nothing yet — once the admin has any assignment
+  // in place, there's nothing to offer and no unfiltered fetch is made.
+  useEffect(() => {
+    let cancelled = false
+    setBannerDismissed(false)
+
+    if (teacherAssignments.length > 0) {
+      setPriorGroup(null)
+      return undefined
+    }
+
+    async function checkPriorTerms() {
+      setCheckingPrior(true)
+      try {
+        const { data } = await timetablingApi.getTeacherAssignments({})
+        const all = data.results || data
+        const others = all.filter((a) => !(a.term === term && a.academic_year === academicYear))
+        if (others.length === 0) {
+          if (!cancelled) setPriorGroup(null)
+          return
+        }
+        others.sort((a, b) => {
+          if (b.academic_year !== a.academic_year) return b.academic_year - a.academic_year
+          return (TERM_ORDER[b.term] || 0) - (TERM_ORDER[a.term] || 0)
+        })
+        const top = others[0]
+        const items = others.filter((a) => a.term === top.term && a.academic_year === top.academic_year)
+        if (!cancelled) {
+          setPriorGroup({ term: top.term, academicYear: top.academic_year, items })
+        }
+      } catch {
+        if (!cancelled) setPriorGroup(null)
+      } finally {
+        if (!cancelled) setCheckingPrior(false)
+      }
+    }
+
+    checkPriorTerms()
+    return () => {
+      cancelled = true
+    }
+  }, [term, academicYear, teacherAssignments.length])
+
+  const copyFromPriorTerm = async () => {
+    if (!priorGroup) return
+    setCopyingPrior(true)
+    setFormError('')
+    try {
+      // Group prior assignments by (teacher, subject) so each becomes one
+      // bulk call with all its classrooms, matching how the existing
+      // Quick Add / bulk endpoint already expects data.
+      const groups = new Map()
+      for (const a of priorGroup.items) {
+        const teacherId = typeof a.teacher === 'object' ? a.teacher.id : a.teacher
+        const subjectId = typeof a.subject === 'object' ? a.subject.id : a.subject
+        const classroomId = typeof a.classroom === 'object' ? a.classroom.id : a.classroom
+        const key = `${teacherId}-${subjectId}`
+        if (!groups.has(key)) groups.set(key, { teacher: teacherId, subject: subjectId, classrooms: [] })
+        groups.get(key).classrooms.push(classroomId)
+      }
+
+      for (const group of groups.values()) {
+        await timetablingApi.bulkTeacherAssignment({
+          teacher: group.teacher,
+          subject: group.subject,
+          classrooms: group.classrooms,
+          term,
+          academic_year: academicYear,
+        })
+      }
+
+      const { data } = await timetablingApi.getTeacherAssignments({ term, academic_year: academicYear })
+      setTeacherAssignments(data.results || data)
+      setPriorGroup(null)
+      setBannerDismissed(true)
+    } catch (err) {
+      setFormError(extractErrorMessage(err, 'Failed to copy assignments from the previous term. Please try again.'))
+    } finally {
+      setCopyingPrior(false)
+    }
+  }
+
   const saveAssignment = async () => {
     const { teacher, subject, classroom } = form
     if (!teacher || !subject || !classroom) return
@@ -192,7 +307,15 @@ export default function TeachersStep({
 
   const handleFilterChange = (key, value) => {
     setFilters((f) => ({ ...f, [key]: value }))
+    // Any filter change reshapes the list — collapse back to the first page
+    // so the user always starts from the top of the new result set.
+    setVisibleAssignmentsCount(PAGE_SIZE)
   }
+
+  // --- Pagination slices: only PAGE_SIZE rows are ever rendered at once ---
+  const visibleAssignments = filteredAssignments.slice(0, visibleAssignmentsCount)
+  const hiddenAssignmentsCount = filteredAssignments.length - visibleAssignments.length
+  const assignmentsFullyVisible = visibleAssignmentsCount >= filteredAssignments.length
 
   // Sorted, live overview of every teacher who has at least one assignment —
   // the same numbers the shell diagnostic script computes, always visible.
@@ -207,8 +330,36 @@ export default function TeachersStep({
       .sort((a, b) => b.load - a.load)
   }, [teacherLoadMap, templateSupply, teachers])
 
+  const visibleLoads = teacherLoadOverview.slice(0, visibleLoadsCount)
+  const hiddenLoadsCount = teacherLoadOverview.length - visibleLoads.length
+  const loadsFullyVisible = visibleLoadsCount >= teacherLoadOverview.length
+
+  const showPriorBanner = !bannerDismissed && !checkingPrior && priorGroup && teacherAssignments.length === 0
+
   return (
     <div className="space-y-6">
+      {showPriorBanner && (
+        <div className="flex flex-col gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-2 text-sm text-blue-800">
+            <CopyPlus size={18} className="mt-0.5 shrink-0" />
+            <span>
+              You have teacher assignments from{' '}
+              <strong>{TERM_LABELS[priorGroup.term] || priorGroup.term} {priorGroup.academicYear}</strong>{' '}
+              ({priorGroup.items.length} assignment{priorGroup.items.length !== 1 ? 's' : ''}). Copy them into{' '}
+              {TERM_LABELS[term] || 'this term'} {academicYear}, or start fresh.
+            </span>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <Button size="sm" onClick={copyFromPriorTerm} loading={copyingPrior}>
+              Copy them here
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => setBannerDismissed(true)}>
+              <X size={14} className="mr-1" /> Start fresh
+            </Button>
+          </div>
+        </div>
+      )}
+
       <Card className="p-5">
         <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -366,7 +517,7 @@ export default function TeachersStep({
             Total periods/week assigned vs. periods available in that teacher's bell schedule.
           </p>
           <div className="divide-y divide-gray-100">
-            {teacherLoadOverview.map(({ teacherId, name, load, supply }) => {
+            {visibleLoads.map(({ teacherId, name, load, supply }) => {
               const over = load > supply
               const full = load === supply && supply > 0
               return (
@@ -388,6 +539,39 @@ export default function TeachersStep({
               )
             })}
           </div>
+          {(hiddenLoadsCount > 0 || visibleLoadsCount > PAGE_SIZE) && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
+              {hiddenLoadsCount > 0 && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setVisibleLoadsCount((c) => c + PAGE_SIZE)}
+                >
+                  <ChevronDown size={14} className="mr-1" />
+                  Show more ({hiddenLoadsCount} remaining)
+                </Button>
+              )}
+              {hiddenLoadsCount > PAGE_SIZE && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setVisibleLoadsCount(teacherLoadOverview.length)}
+                >
+                  Show all {teacherLoadOverview.length}
+                </Button>
+              )}
+              {visibleLoadsCount > PAGE_SIZE && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setVisibleLoadsCount(PAGE_SIZE)}
+                >
+                  <ChevronUp size={14} className="mr-1" />
+                  Show less
+                </Button>
+              )}
+            </div>
+          )}
         </Card>
       )}
 
@@ -402,10 +586,10 @@ export default function TeachersStep({
             onChange={handleFilterChange}
           />
           <p className="mb-3 text-xs text-gray-500">
-            Showing {filteredAssignments.length} of {teacherAssignments.length} assignments
+            Showing {visibleAssignments.length} of {filteredAssignments.length} assignments
           </p>
           <div className="divide-y divide-gray-100">
-            {filteredAssignments.map((a) => (
+            {visibleAssignments.map((a) => (
               <div key={a.id} className="flex items-center justify-between py-3">
                 <div>
                   <p className="font-medium text-gray-900">{a.teacher_name || a.teacher}</p>
@@ -422,6 +606,39 @@ export default function TeachersStep({
               </div>
             ))}
           </div>
+          {(hiddenAssignmentsCount > 0 || visibleAssignmentsCount > PAGE_SIZE) && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
+              {hiddenAssignmentsCount > 0 && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setVisibleAssignmentsCount((c) => c + PAGE_SIZE)}
+                >
+                  <ChevronDown size={14} className="mr-1" />
+                  Show more ({hiddenAssignmentsCount} remaining)
+                </Button>
+              )}
+              {hiddenAssignmentsCount > PAGE_SIZE && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setVisibleAssignmentsCount(filteredAssignments.length)}
+                >
+                  Show all {filteredAssignments.length}
+                </Button>
+              )}
+              {visibleAssignmentsCount > PAGE_SIZE && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setVisibleAssignmentsCount(PAGE_SIZE)}
+                >
+                  <ChevronUp size={14} className="mr-1" />
+                  Show less
+                </Button>
+              )}
+            </div>
+          )}
         </Card>
       )}
 

@@ -75,7 +75,23 @@ def solve_timetable_job(
     persist=True,
     max_seconds=None,
     skip_diagnostics=False,
+    mark_job_status=True,
 ):
+    """
+    mark_job_status (default True): whether this call is allowed to write
+    job.status / job.failure_reason / job.solve_time_seconds. Only ever set
+    this False when a caller is orchestrating MULTIPLE calls into this
+    function as part of one larger run and wants to own those fields itself
+    — which is exactly what tasks.py's sequential per-classroom loop does.
+    Without this, every per-classroom success flips job.status to DONE (and
+    every per-classroom failure flips it to FAILED) mid-run, long before the
+    overall job is actually finished — which silently defeats the
+    concurrency guard in TimetableJobViewSet.create() (it checks for
+    status in PENDING/RUNNING to block a second "Generate" click, and a
+    prematurely-DONE or prematurely-FAILED status doesn't match that
+    check). Entries/current_score/best_bound are still persisted either
+    way; only the terminal status fields are gated.
+    """
     try:
         from ortools.sat.python import cp_model
     except ImportError as exc:
@@ -406,19 +422,16 @@ def solve_timetable_job(
     if status == cp_model.INFEASIBLE:
         if skip_diagnostics:
             reason = 'Whole-school model is infeasible within the probing time limit.'
-            if persist:
-                job.failure_reason = reason
-                job.status = TimetableJob.Status.FAILED
-                job.solve_time_seconds = time.monotonic() - started
-                job.save(update_fields=['failure_reason', 'status', 'solve_time_seconds', 'updated_at'])
-            return {'status': 'failed', 'reason': reason}
-        if persist:
+        elif persist:
             reason = diagnose_timetable_failure(job, tenant_id, class_stream_ids)
+        else:
+            reason = 'No feasible timetable found.'
+        if persist and mark_job_status:
             job.failure_reason = reason
             job.status = TimetableJob.Status.FAILED
             job.solve_time_seconds = time.monotonic() - started
             job.save(update_fields=['failure_reason', 'status', 'solve_time_seconds', 'updated_at'])
-        return {'status': 'failed', 'reason': job.failure_reason or 'No feasible timetable found.'}
+        return {'status': 'failed', 'reason': reason}
     elif status == cp_model.UNKNOWN:
         timeout_reason = (
             'Solver timed out before finding a feasible timetable. '
@@ -426,23 +439,23 @@ def solve_timetable_job(
             'Try regenerating for individual classrooms or streams instead, '
             'which is a dramatically smaller search space.'
         )
-        if persist:
+        if persist and mark_job_status:
             job.failure_reason = timeout_reason
             job.status = TimetableJob.Status.FAILED
             job.solve_time_seconds = time.monotonic() - started
             job.save(update_fields=['failure_reason', 'status', 'solve_time_seconds', 'updated_at'])
-        return {'status': 'failed', 'reason': job.failure_reason or timeout_reason}
+        return {'status': 'failed', 'reason': timeout_reason}
     elif status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         invalid_reason = (
             'The timetable model is invalid — this usually indicates a bug '
             'in the solver setup (e.g., conflicting fixed entries).'
         )
-        if persist:
+        if persist and mark_job_status:
             job.failure_reason = invalid_reason
             job.status = TimetableJob.Status.FAILED
             job.solve_time_seconds = time.monotonic() - started
             job.save(update_fields=['failure_reason', 'status', 'solve_time_seconds', 'updated_at'])
-        return {'status': 'failed', 'reason': job.failure_reason or invalid_reason}
+        return {'status': 'failed', 'reason': invalid_reason}
 
     solved_entries = []
     for var, assignment, period, room, _rule in variables.values():
@@ -467,12 +480,21 @@ def solve_timetable_job(
                 )
                 for assignment, period, room in solved_entries
             ])
-            job.status = TimetableJob.Status.DONE
-            job.current_score = solver.ObjectiveValue()
-            job.best_bound = solver.BestObjectiveBound()
-            job.solve_time_seconds = time.monotonic() - started
-            job.failure_reason = ''
-            job.save(update_fields=['status', 'current_score', 'best_bound', 'solve_time_seconds', 'failure_reason', 'updated_at'])
+            if mark_job_status:
+                job.status = TimetableJob.Status.DONE
+                job.current_score = solver.ObjectiveValue()
+                job.best_bound = solver.BestObjectiveBound()
+                job.solve_time_seconds = time.monotonic() - started
+                job.failure_reason = ''
+                job.save(update_fields=['status', 'current_score', 'best_bound', 'solve_time_seconds', 'failure_reason', 'updated_at'])
+            else:
+                # Part of a larger sequential run — tasks.py owns status,
+                # failure_reason, and solve_time_seconds for the whole run
+                # and sets them once every classroom has been attempted.
+                # Still worth persisting live progress numbers per step.
+                job.current_score = solver.ObjectiveValue()
+                job.best_bound = solver.BestObjectiveBound()
+                job.save(update_fields=['current_score', 'best_bound', 'updated_at'])
 
     return {'status': 'done', 'entries': len(solved_entries), 'score': solver.ObjectiveValue()}
 

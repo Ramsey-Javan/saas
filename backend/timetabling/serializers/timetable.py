@@ -12,6 +12,7 @@ class TimetableJobSerializer(serializers.ModelSerializer):
             'id', 'term', 'academic_year', 'status', 'created_by',
             'created_by_name', 'current_score', 'best_bound', 'failure_reason',
             'solve_time_seconds', 'created_at', 'updated_at',
+            'published', 'published_at',
         ]
         read_only_fields = [
             'status', 'created_by', 'created_by_name', 'current_score',

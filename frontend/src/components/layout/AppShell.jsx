@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   GraduationCap, Users, DollarSign, BookOpen,
@@ -85,14 +86,62 @@ const NAV_ORDER = {
 // not just their role.
 const HOME_CLASS_ITEM = { label: 'Home Class', icon: Crown, href: '/teacher/home-class' }
 
+// Tooltip rendered through a portal directly into document.body, positioned
+// with `fixed` coordinates taken from the icon's real getBoundingClientRect().
+// CSS-only (group-hover + absolute) was tried first but the sidebar's <nav>
+// needs overflow-y-auto for scrolling, and per the CSS spec, setting one
+// overflow axis to non-visible silently forces the other axis to `auto` too
+// — so overflow-x-visible on nav never actually took effect, and the
+// tooltip was getting clipped by nav's own scroll container. A body-level
+// portal sidesteps every ancestor's overflow/clipping entirely.
+function IconTooltip({ label, anchorRect }) {
+  if (!anchorRect) return null
+  return createPortal(
+    <span
+      className="pointer-events-none fixed z-[1000] whitespace-nowrap rounded-md bg-gray-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg"
+      style={{
+        top: anchorRect.top + anchorRect.height / 2,
+        left: anchorRect.right + 8,
+        transform: 'translateY(-50%)',
+      }}
+      role="tooltip"
+    >
+      {label}
+    </span>,
+    document.body
+  )
+}
+
+// Shared hover-tracking for any collapsed-sidebar icon target. Only measures
+// and shows anything when collapsed is true; a no-op (never shows) otherwise.
+function useCollapsedTooltip(collapsed) {
+  const ref = useRef(null)
+  const [rect, setRect] = useState(null)
+  const [hovered, setHovered] = useState(false)
+
+  const onMouseEnter = () => {
+    if (!collapsed) return
+    if (ref.current) setRect(ref.current.getBoundingClientRect())
+    setHovered(true)
+  }
+  const onMouseLeave = () => setHovered(false)
+
+  return { ref, onMouseEnter, onMouseLeave, show: collapsed && hovered, rect }
+}
+
 function NavItem({ item, collapsed, badge, onNavigate }) {
+  const { ref, onMouseEnter, onMouseLeave, show, rect } = useCollapsedTooltip(collapsed)
+
   return (
     <NavLink
+      ref={ref}
       to={item.href}
       end={item.href.split('/').length <= 2}
       onClick={onNavigate}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
       className={({ isActive }) => cn(
-        'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all group',
+        'relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all',
         isActive
           ? 'bg-[var(--brand-primary)] text-white'
           : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
@@ -105,6 +154,10 @@ function NavItem({ item, collapsed, badge, onNavigate }) {
           {badge}
         </span>
       )}
+      {collapsed && badge > 0 && (
+        <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500" />
+      )}
+      {show && <IconTooltip label={item.label} anchorRect={rect} />}
     </NavLink>
   )
 }
@@ -178,7 +231,11 @@ export default function AppShell({ children }) {
     navigate('/login')
   }
 
-  const SidebarContent = () => (
+  const SidebarContent = () => {
+    const changePasswordTooltip = useCollapsedTooltip(collapsed)
+    const logoutTooltip = useCollapsedTooltip(collapsed)
+
+    return (
     <div className="flex flex-col h-full">
       {/* Logo */}
       <div className="flex items-center gap-3 px-4 py-5 border-b border-gray-100">
@@ -194,7 +251,7 @@ export default function AppShell({ children }) {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+      <nav className="flex-1 p-3 space-y-1 overflow-y-auto overflow-x-visible">
         {navItems.map((item) => (
           <NavItem
             key={item.href}
@@ -217,10 +274,13 @@ export default function AppShell({ children }) {
           </div>
         )}
         <NavLink
+          ref={changePasswordTooltip.ref}
           to="/settings/change-password"
           onClick={() => setMobileOpen(false)}
+          onMouseEnter={changePasswordTooltip.onMouseEnter}
+          onMouseLeave={changePasswordTooltip.onMouseLeave}
           className={({ isActive }) => cn(
-            'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all w-full mb-1',
+            'relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all w-full mb-1',
             isActive
               ? 'bg-[var(--brand-primary)] text-white'
               : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
@@ -228,17 +288,25 @@ export default function AppShell({ children }) {
         >
           <Key size={18} />
           {!collapsed && <span>Change Password</span>}
+          {changePasswordTooltip.show && (
+            <IconTooltip label="Change Password" anchorRect={changePasswordTooltip.rect} />
+          )}
         </NavLink>
         <button
+          ref={logoutTooltip.ref}
           onClick={handleLogout}
-          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-600 hover:bg-red-50 hover:text-red-600 transition-all w-full"
+          onMouseEnter={logoutTooltip.onMouseEnter}
+          onMouseLeave={logoutTooltip.onMouseLeave}
+          className="relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-600 hover:bg-red-50 hover:text-red-600 transition-all w-full"
         >
           <LogOut size={18} />
           {!collapsed && <span>Sign out</span>}
+          {logoutTooltip.show && <IconTooltip label="Sign out" anchorRect={logoutTooltip.rect} />}
         </button>
       </div>
     </div>
-  )
+    )
+  }
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
@@ -249,7 +317,7 @@ export default function AppShell({ children }) {
 
       {/* Desktop sidebar */}
       <aside className={cn(
-        'hidden lg:flex flex-col bg-white border-r border-gray-100 transition-all duration-200',
+        'hidden lg:flex flex-col bg-white border-r border-gray-100 transition-all duration-200 relative overflow-visible',
         collapsed ? 'w-16' : 'w-56'
       )}>
         <SidebarContent />

@@ -114,6 +114,21 @@ class StaffProfileViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         tenant = request.user.tenant
+        # Guard against duplicate login accounts before creating anything
+        method = data['onboarding_method']
+        if method == 'direct':
+            email = data.get('email') or f"{data['first_name'].lower()}.{data['last_name'].lower()}@staff.local"
+            if CustomUser.objects.filter(email=email).exists():
+                return Response(
+                    {'email': ['A user with this email already exists. Use a different email or deactivate the old account first.']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        if method == 'invite' and data.get('email'):
+            if CustomUser.objects.filter(email=data['email']).exists():
+                return Response(
+                    {'email': ['This email already has an account. They can log in directly — no invite needed.']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         if not tenant:
             return Response(
                 {'error': 'Platform superadmins cannot onboard staff directly. Please log in as a school admin.'},
@@ -499,6 +514,11 @@ class AcceptInviteView(APIView):
             invite.status = StaffInvite.Status.EXPIRED
             invite.save(update_fields=['status'])
             return Response({'error': 'This invite has expired. Ask your admin to resend it.'}, status=status.HTTP_400_BAD_REQUEST)
+        if CustomUser.objects.filter(email=invite.email).exists():
+            return Response(
+                {'error': 'An account with this email already exists. Please log in instead.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         profile = invite.staff_profile
         with transaction.atomic():

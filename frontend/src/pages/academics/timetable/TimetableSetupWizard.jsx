@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Clock, DoorOpen, BookOpen, Users, CheckCircle2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Clock, DoorOpen, BookOpen, Users, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { academicsApi } from '@/api/academics'
 import { studentsApi } from '@/api/students'
 import { timetablingApi } from '@/api/timetabling'
@@ -14,11 +14,11 @@ import TeachersStep from './steps/TeacherStep'
 import ReviewStep from './steps/ReviewStep'
 
 const STEPS = [
-  { id: 1, title: 'Bell Schedule', icon: Clock, description: 'Set daily period times' },
-  { id: 2, title: 'Rooms', icon: DoorOpen, description: 'Add labs & shared spaces' },
-  { id: 3, title: 'Subjects', icon: BookOpen, description: 'Periods & rules per grade' },
-  { id: 4, title: 'Teachers', icon: Users, description: 'Assign to classes' },
-  { id: 5, title: 'Review', icon: CheckCircle2, description: 'Check readiness' },
+  { id: 1, title: 'Bell Schedule', icon: Clock, description: 'Set when each class starts and ends — every other step depends on this being right first.' },
+  { id: 2, title: 'Rooms', icon: DoorOpen, description: 'Only needed if a subject requires a special room like a lab or hall. Safe to skip otherwise.' },
+  { id: 3, title: 'Subjects', icon: BookOpen, description: 'Set how many lessons per week each subject gets — this decides how full each class\u2019s week looks.' },
+  { id: 4, title: 'Teachers', icon: Users, description: 'Match a teacher to each subject for every class. You can leave some blank and fill them in later.' },
+  { id: 5, title: 'Review', icon: CheckCircle2, description: 'Check for any gaps before generating, and see exactly what\u2019s missing if something isn\u2019t ready.' },
 ]
 
 const TERM_OPTIONS = [
@@ -27,8 +27,36 @@ const TERM_OPTIONS = [
   { value: 'term3', label: 'Term 3' },
 ]
 
+// DRF's default pagination caps /auth/users/ at its page size (commonly 20).
+// A single api.get() call was silently dropping every teacher past that
+// threshold, which is why the wizard worked fine with a small staff list and
+// broke once more teachers were added: the Grid's <select> can't render a
+// selected value for a teacher ID that isn't in its own <option> list, so it
+// falls back to "Unassigned" even though the assignment genuinely exists.
+// This walks every page via DRF's `next` cursor until exhausted, so the
+// teachers array is always complete regardless of how many staff exist.
+async function fetchAllUsers() {
+  let results = []
+  let nextUrl = '/auth/users/'
+  let isFirstRequest = true
+  while (nextUrl) {
+    const { data } = await api.get(nextUrl, isFirstRequest ? { params: { page_size: 200 } } : undefined)
+    isFirstRequest = false
+    if (Array.isArray(data)) {
+      // Endpoint isn't paginated at all — nothing more to fetch.
+      results = results.concat(data)
+      break
+    }
+    results = results.concat(data.results || [])
+    nextUrl = data.next || null
+  }
+  return results
+}
+
 export default function TimetableSetupWizard({ onComplete }) {
   const [step, setStep] = useState(1)
+  const [maxStepReached, setMaxStepReached] = useState(1)
+  const [blockMessage, setBlockMessage] = useState(null)
   const [loading, setLoading] = useState(true)
 
   const [subjects, setSubjects] = useState([])
@@ -50,10 +78,10 @@ export default function TimetableSetupWizard({ onComplete }) {
   const loadAll = useCallback(async (activeTerm, activeYear) => {
     setLoading(true)
     try {
-      const [subRes, classRes, userRes, tempRes, roomRes, ruleRes, assignRes, periodRes] = await Promise.all([
+      const [subRes, classRes, allUsers, tempRes, roomRes, ruleRes, assignRes, periodRes] = await Promise.all([
         academicsApi.getSubjects({ is_active: true }),
         studentsApi.getClassrooms({ is_active: true }),
-        api.get('/auth/users/').catch(() => ({ data: { results: [] } })),
+        fetchAllUsers().catch(() => []),
         timetablingApi.getScheduleTemplates({}),
         timetablingApi.getRooms({}),
         timetablingApi.getSubjectRules({}),
@@ -62,7 +90,7 @@ export default function TimetableSetupWizard({ onComplete }) {
       ])
       setSubjects(listFromResponse(subRes.data))
       setClassrooms(listFromResponse(classRes.data))
-      setTeachers(listFromResponse(userRes.data).filter((u) => u.role === 'teacher'))
+      setTeachers(allUsers.filter((u) => u.role === 'teacher'))
       setTemplates(listFromResponse(tempRes.data))
       setRooms(listFromResponse(roomRes.data))
       setSubjectRules(listFromResponse(ruleRes.data))
@@ -93,6 +121,60 @@ export default function TimetableSetupWizard({ onComplete }) {
   const handleYearChange = (nextYear) => {
     setAcademicYear(nextYear)
     reloadTeacherAssignments(term, nextYear)
+  }
+
+  // --- Step completion criteria ---
+  // Rooms (step 2) and Teachers (step 4) are intentionally always "complete":
+  // rooms are only required if a subject rule later needs a specific room
+  // type (readiness.py already catches that at generation time), and teacher
+  // assignments can legitimately be partial — the Review step surfaces
+  // exactly what's still missing rather than blocking the wizard on it.
+  const stepStatus = useMemo(() => ({
+    1: templates.some((t) => t.is_active) && periods.some((p) => !p.is_break),
+    2: true,
+    3: subjectRules.some((r) => r.is_active && r.periods_per_week > 0),
+    4: true,
+  }), [templates, periods, subjectRules])
+
+  // Auto-dismiss the "locked step" message so it doesn't linger forever.
+  useEffect(() => {
+    if (!blockMessage) return
+    const t = setTimeout(() => setBlockMessage(null), 5000)
+    return () => clearTimeout(t)
+  }, [blockMessage])
+
+  // Called by each step's own Next button (passed as that step's onNext prop).
+  // The step components themselves are unchanged — they still just call
+  // onNext() when their local "Next" button is clicked. This function decides
+  // whether that's actually allowed to move the wizard forward.
+  const guardedAdvance = (fromStepId) => {
+    if (!stepStatus[fromStepId]) {
+      const stepName = STEPS.find((s) => s.id === fromStepId)?.title || 'this step'
+      setBlockMessage(`Complete "${stepName}" before continuing.`)
+      return
+    }
+    setBlockMessage(null)
+    const next = fromStepId + 1
+    setStep(next)
+    setMaxStepReached((m) => Math.max(m, next))
+  }
+
+  // Called when the user clicks a circle in StepIndicator. Backward/visited
+  // navigation is always allowed; jumping past the furthest-completed step
+  // is blocked with the same messaging as a blocked Next button.
+  const handleStepClick = (targetStepId) => {
+    if (targetStepId <= maxStepReached) {
+      setBlockMessage(null)
+      setStep(targetStepId)
+      return
+    }
+    const blockingStep = STEPS.find((s) => s.id === maxStepReached)?.title || 'the current step'
+    setBlockMessage(`Complete "${blockingStep}" before continuing.`)
+  }
+
+  const goBack = (targetStepId) => {
+    setBlockMessage(null)
+    setStep(targetStepId)
   }
 
   if (loading) {
@@ -135,7 +217,23 @@ export default function TimetableSetupWizard({ onComplete }) {
         </Select>
       </div>
 
-      <StepIndicator current={step} steps={STEPS} />
+      <StepIndicator
+        current={step}
+        steps={STEPS}
+        maxStepReached={maxStepReached}
+        onStepClick={handleStepClick}
+      />
+
+      <p className="mx-auto max-w-xl text-center text-sm text-gray-500">
+        {STEPS.find((s) => s.id === step)?.description}
+      </p>
+
+      {blockMessage && (
+        <div className="mx-auto flex max-w-xl items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+          <AlertTriangle size={16} className="shrink-0" />
+          <span>{blockMessage}</span>
+        </div>
+      )}
 
       {step === 1 && (
         <BellScheduleStep
@@ -143,7 +241,7 @@ export default function TimetableSetupWizard({ onComplete }) {
           periods={periods}
           setTemplates={setTemplates}
           setPeriods={setPeriods}
-          onNext={() => setStep(2)}
+          onNext={() => guardedAdvance(1)}
         />
       )}
 
@@ -151,8 +249,8 @@ export default function TimetableSetupWizard({ onComplete }) {
         <RoomsStep
           rooms={rooms}
           setRooms={setRooms}
-          onBack={() => setStep(1)}
-          onNext={() => setStep(3)}
+          onBack={() => goBack(1)}
+          onNext={() => guardedAdvance(2)}
         />
       )}
 
@@ -164,8 +262,8 @@ export default function TimetableSetupWizard({ onComplete }) {
           periods={periods}
           subjectRules={subjectRules}
           setSubjectRules={setSubjectRules}
-          onBack={() => setStep(2)}
-          onNext={() => setStep(4)}
+          onBack={() => goBack(2)}
+          onNext={() => guardedAdvance(3)}
         />
       )}
 
@@ -180,8 +278,8 @@ export default function TimetableSetupWizard({ onComplete }) {
           subjectRules={subjectRules}
           term={term}
           academicYear={academicYear}
-          onBack={() => setStep(3)}
-          onNext={() => setStep(5)}
+          onBack={() => goBack(3)}
+          onNext={() => guardedAdvance(4)}
         />
       )}
 
@@ -191,7 +289,7 @@ export default function TimetableSetupWizard({ onComplete }) {
           setReadiness={setReadiness}
           term={term}
           academicYear={academicYear}
-          onBack={() => setStep(4)}
+          onBack={() => goBack(4)}
           onComplete={onComplete}
         />
       )}

@@ -71,12 +71,20 @@ services:
       REDIS_URL: redis://redis:6379/0
       REDIS_CACHE_URL: redis://redis:6379/1
 
-  # Worker dedicated exclusively to heavy timetable calculations
+  # Worker dedicated exclusively to heavy timetable calculations.
+  # --concurrency is set explicitly rather than left at Celery's default
+  # (one process per CPU core): CP-SAT/OR-Tools solves are CPU-heavy on
+  # their own, and if the solver ever uses internal multi-threading too,
+  # an uncapped per-core worker pool here can oversubscribe the host and
+  # make every concurrent solve slower rather than improving throughput.
+  # 2 is a starting point, not a measured number — tune it against your
+  # actual host's core count and how many tenants realistically generate
+  # timetables at the same time.
   celery_timetable:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A core worker -l info -Q timetable_solver
+    command: celery -A core worker -l info -Q timetable_solver --concurrency=2
     volumes:
       - ./backend:/app
     env_file:
