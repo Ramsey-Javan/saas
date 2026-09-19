@@ -1,4 +1,6 @@
-from django.db import transaction
+from datetime import timedelta
+
+from django.db import IntegrityError, connection, transaction
 from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
@@ -55,6 +57,43 @@ class ReadinessView(APIView):
         return Response(check_timetable_readiness(request.user.tenant, term, academic_year))
 
 
+# Message shown to the user whenever a generation attempt is rejected because
+# another one is already in flight for the same term/year — kept as one
+# constant so the create() and regenerate_partial() paths (and any future
+# caller) can never say something subtly different for the same condition.
+GENERATION_IN_PROGRESS_MESSAGE = (
+    'A timetable generation is already in progress for this term. Please wait for it to finish.'
+)
+
+# A job stuck at PENDING/RUNNING longer than this is treated as abandoned
+# (a crashed worker, most likely) rather than genuinely still working, and
+# no longer blocks a new generation attempt. Set comfortably above
+# tasks.py's own ceilings: OVERALL_SOLVE_BUDGET (20 min) bounds a normal
+# sequential solve, and Celery's task_time_limit (30 min, core/celery.py)
+# is the hard kill for a genuinely wedged process — 35 minutes gives room
+# for that hard kill and a task_reject_on_worker_lost redelivery to happen
+# and get moving again before this treats the job as dead.
+STALE_JOB_MINUTES = 35
+
+
+def _acquire_generation_lock(cache_key):
+    """
+    Postgres transaction-scoped advisory lock, non-blocking. Returns True if
+    acquired, False if another in-flight request already holds it. Must be
+    called inside an open transaction.atomic() block — the lock releases
+    automatically the moment that transaction commits or rolls back, so it
+    only protects the tight race between two near-simultaneous requests
+    (e.g. a literal double-click), not the full duration of the background
+    Celery solve that follows — that longer window is covered separately by
+    checking for an existing PENDING/RUNNING TimetableJob row, since a job
+    row can exist and be queued for a while before a worker actually flips
+    it to RUNNING.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute('SELECT pg_try_advisory_xact_lock(hashtext(%s))', [cache_key])
+        return cursor.fetchone()[0]
+
+
 class TimetableJobViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = TimetableJob.objects.select_related('created_by').order_by('-created_at')
     serializer_class = TimetableJobSerializer
@@ -81,13 +120,37 @@ class TimetableJobViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 {'detail': 'term and academic_year are required to generate a timetable.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        readiness = check_timetable_readiness(request.user.tenant, term, academic_year)
-        if not readiness['ready']:
-            return Response(readiness, status=status.HTTP_400_BAD_REQUEST)
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        job = serializer.save(tenant=request.user.tenant, created_by=request.user)
-        generate_timetable_task.apply_async(args=[job.id, request.user.tenant_id], queue='timetable_solver')
+
+        tenant = request.user.tenant
+
+        with transaction.atomic():
+            lock_key = f'timetable-generate:{tenant.id}:{term}:{academic_year}'
+            if not _acquire_generation_lock(lock_key):
+                return Response({'detail': GENERATION_IN_PROGRESS_MESSAGE}, status=status.HTTP_409_CONFLICT)
+
+            already_in_flight = TimetableJob.objects.filter(
+                tenant=tenant,
+                term=term,
+                academic_year=academic_year,
+                status__in=[TimetableJob.Status.PENDING, TimetableJob.Status.RUNNING],
+                updated_at__gte=timezone.now() - timedelta(minutes=STALE_JOB_MINUTES),
+            ).exists()
+            if already_in_flight:
+                return Response({'detail': GENERATION_IN_PROGRESS_MESSAGE}, status=status.HTTP_409_CONFLICT)
+
+            readiness = check_timetable_readiness(tenant, term, academic_year)
+            if not readiness['ready']:
+                return Response(readiness, status=status.HTTP_400_BAD_REQUEST)
+
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            job = serializer.save(tenant=tenant, created_by=request.user)
+
+        # Dispatched only after the transaction above has committed — if we
+        # fired this inside the atomic block and something later in the
+        # block failed, we'd have queued a Celery task for a job row that
+        # was rolled back and no longer exists.
+        generate_timetable_task.apply_async(args=[job.id, tenant.id], queue='timetable_solver')
         return Response(self.get_serializer(job).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='regenerate-partial')
@@ -95,9 +158,25 @@ class TimetableJobViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         job = self.get_object()
         serializer = PartialRegenerateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        job.status = TimetableJob.Status.PENDING
-        job.failure_reason = ''
-        job.save(update_fields=['status', 'failure_reason', 'updated_at'])
+
+        with transaction.atomic():
+            # Scoped to this specific job's id rather than term/year — a
+            # partial regenerate operates on one already-created job, so the
+            # only race worth closing here is two requests both trying to
+            # kick off a partial regenerate on the SAME job at once.
+            lock_key = f'timetable-regenerate:{job.id}'
+            if not _acquire_generation_lock(lock_key):
+                return Response({'detail': GENERATION_IN_PROGRESS_MESSAGE}, status=status.HTTP_409_CONFLICT)
+
+            job.refresh_from_db()
+            is_stale = job.updated_at < timezone.now() - timedelta(minutes=STALE_JOB_MINUTES)
+            if job.status == TimetableJob.Status.RUNNING and not is_stale:
+                return Response({'detail': GENERATION_IN_PROGRESS_MESSAGE}, status=status.HTTP_409_CONFLICT)
+
+            job.status = TimetableJob.Status.PENDING
+            job.failure_reason = ''
+            job.save(update_fields=['status', 'failure_reason', 'updated_at'])
+
         regenerate_partial_task.apply_async(
             args=[job.id, request.user.tenant_id, serializer.validated_data['class_stream_ids']],
             queue='timetable_solver',
@@ -312,10 +391,21 @@ class TimetableEntryViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         data = [{'id': c.id, 'name': str(c)} for c in classrooms]
         return Response(data)
 
+    def _ensure_job_not_generating(self, job):
+        # Refresh rather than trust whatever was loaded earlier in the
+        # request — status can change out from under us at any moment
+        # since it's flipped by a background Celery task, not this request.
+        job.refresh_from_db(fields=['status'])
+        if job.status in (job.Status.PENDING, job.Status.RUNNING):
+            raise ValidationError({
+                'job': 'This timetable is currently being generated. Please wait for it to finish before editing.',
+            })
+
     def perform_update(self, serializer):
         if not is_admin(self.request.user):
             raise PermissionDenied('Only admins can edit timetable entries.')
         instance = serializer.instance
+        self._ensure_job_not_generating(instance.job)
         data = {**{field: getattr(instance, field) for field in ['classroom', 'subject', 'teacher', 'period', 'room']}, **serializer.validated_data}
         validate_timetable_move(TimetableMove(
             tenant=self.request.user.tenant,
@@ -327,12 +417,23 @@ class TimetableEntryViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             room=data.get('room'),
             entry_id=instance.id,
         ))
-        serializer.save(tenant=self.request.user.tenant, locked=True)
+        try:
+            serializer.save(tenant=self.request.user.tenant, locked=True)
+        except IntegrityError:
+            # Belt-and-suspenders against the tight race validate_timetable_move
+            # can't fully close on its own (its overlap checks aren't run
+            # under a row lock) — the unique_together on
+            # (job, classroom, period) is the real backstop, this just turns
+            # a raw 500 into something the user can act on.
+            raise ValidationError({
+                'period': 'This slot was just taken by another change. Please refresh and try again.',
+            })
 
     def perform_create(self, serializer):
         if not is_admin(self.request.user):
             raise PermissionDenied('Only admins can create timetable entries.')
         data = serializer.validated_data
+        self._ensure_job_not_generating(data['job'])
         validate_timetable_move(TimetableMove(
             tenant=self.request.user.tenant,
             job=data['job'],
@@ -342,7 +443,12 @@ class TimetableEntryViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             period=data['period'],
             room=data.get('room'),
         ))
-        serializer.save(tenant=self.request.user.tenant, locked=True)
+        try:
+            serializer.save(tenant=self.request.user.tenant, locked=True)
+        except IntegrityError:
+            raise ValidationError({
+                'period': 'This slot was just taken by another change. Please refresh and try again.',
+            })
 
     @action(detail=True, methods=['post'], url_path='lock')
     def lock(self, request, pk=None):
@@ -390,11 +496,20 @@ class TimetablePDFDownloadView(APIView):
         if is_parent(request.user):
             raise PermissionDenied('PDF download not available for parents.')
 
+        # A sequential solve persists entries per-classroom as it succeeds —
+        # so a job whose overall status ended up FAILED (because ONE
+        # classroom, say, had no feasible arrangement) can still have real,
+        # usable entries for every classroom that DID solve. Restricting
+        # this to status=DONE only meant those genuinely-generated entries
+        # were completely unreachable via PDF whenever any single classroom
+        # failed. PENDING/RUNNING are deliberately excluded — those are
+        # still actively being computed, so entries for them may be
+        # incomplete or about to be rewritten.
         job = TimetableJob.objects.filter(
             tenant=tenant,
             term=term,
             academic_year=academic_year,
-            status=TimetableJob.Status.DONE,
+            status__in=[TimetableJob.Status.DONE, TimetableJob.Status.FAILED],
         ).order_by('-created_at').first()
 
         if not job:
@@ -458,6 +573,14 @@ class TimetablePDFDownloadView(APIView):
             spaceAfter=12,
             textColor=colors.grey,
         )
+        warning_style = ParagraphStyle(
+            'TimetableWarning',
+            parent=styles['Normal'],
+            fontSize=9,
+            alignment=1,
+            spaceAfter=10,
+            textColor=colors.HexColor('#b91c1c'),
+        )
         cell_style = ParagraphStyle(
             'TimetableCell',
             parent=styles['Normal'],
@@ -493,6 +616,14 @@ class TimetablePDFDownloadView(APIView):
             school_name = tenant.name or 'School'
             elements.append(Paragraph(f'<b>{school_name}</b>', title_style))
             elements.append(Paragraph(f'Timetable — {term} {academic_year}', subtitle_style))
+
+            if idx == 0 and job.status == TimetableJob.Status.FAILED:
+                reason = job.failure_reason or 'Some classes could not be scheduled.'
+                elements.append(Paragraph(
+                    f'<b>Note:</b> This timetable is incomplete — one or more classes are missing below. '
+                    f'{reason}',
+                    warning_style,
+                ))
 
             header_text = f'<b>Class:</b> {classroom}'
             if teacher_id:
@@ -592,3 +723,4 @@ class TimetablePDFDownloadView(APIView):
 
         doc.build(elements)
         return response
+    

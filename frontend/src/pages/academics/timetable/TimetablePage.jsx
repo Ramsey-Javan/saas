@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   CalendarClock,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Download,
   Eye,
@@ -44,10 +46,130 @@ const GENERATION_MESSAGES = [
   'Still working — this can take up to 5 minutes…',
 ]
 
+const READINESS_PAGE_SIZE = 10
+
 function formatElapsed(seconds) {
   const m = Math.floor(seconds / 60)
   const s = seconds % 60
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+/**
+ * Translates a raw job.failure_reason string (which comes straight from
+ * the backend solver — see timetabling/tasks.py and services/solver.py)
+ * into something a non-technical admin can act on. The raw string is
+ * still shown in full behind a "Show technical details" toggle, since it's
+ * genuinely useful when reporting a bug — this just stops it being the
+ * FIRST and ONLY thing a head teacher sees.
+ */
+function simplifyReason(raw) {
+  if (!raw) return ''
+  if (raw.includes('No active classrooms have a bell schedule')) {
+    return 'No bell schedule has been set up yet — go to Setup Wizard → Bell Schedule first.'
+  }
+  if (raw.includes('No teacher-subject-classroom assignments found')) {
+    return 'No teachers have been assigned to classes yet — go to Setup Wizard → Teachers first.'
+  }
+  if (raw.includes('periods but weekly limit is')) {
+    return "A teacher is assigned more periods than their weekly limit allows — check that teacher's workload limit, or reassign some of their subjects."
+  }
+  if (raw.includes('requires double lessons but only has')) {
+    return "A subject needs back-to-back double lessons but doesn't have enough periods per week configured — check that subject's rule in Setup Wizard → Subjects."
+  }
+  if (raw.includes('No consecutive periods available for double lesson')) {
+    return 'A subject needs two back-to-back periods but none are free — check the bell schedule or that subject\u2019s excluded periods.'
+  }
+  if (raw.includes('periods/week total but its bell schedule only has')) {
+    return "This class needs more lesson periods per week than its bell schedule has room for — either add more periods to the bell schedule or reduce some subjects' periods/week."
+  }
+  if (raw.includes('Solver timed out')) {
+    return 'This is a large or complex school and the automatic solver ran out of time on a whole-school attempt. Try regenerating one class at a time instead.'
+  }
+  if (raw.includes('model is invalid')) {
+    return 'Something in the current setup conflicts with itself. This is unusual — worth reporting if it keeps happening.'
+  }
+  if (raw.includes('No feasible timetable found') || raw.includes('infeasible')) {
+    return 'No valid arrangement could be found with the current teachers and rules — this usually means a teacher is assigned to too many classes at once.'
+  }
+  return 'This class could not be scheduled automatically.'
+}
+
+// Matches the shape tasks.py's _solve_classrooms_sequential produces:
+// "[Ran out of time before finishing. ]Sequential solve failed for N
+// classrooms. Classroom <id>: <reason>; Classroom <id>: <reason>; ..."
+// Classroom IDs are raw database PKs in that string (meaningless on their
+// own), which is why this resolves them against the `classrooms` list
+// already loaded on this page rather than showing "Classroom 24" as-is.
+function parseSequentialFailure(raw) {
+  if (!raw) return null
+  const match = raw.match(/^(?:Ran out of time before finishing\. )?Sequential solve failed for \d+ classrooms?\. (.+)$/)
+  if (!match) return null
+  const ranOutOfTime = raw.startsWith('Ran out of time before finishing.')
+  const parts = match[1].split(/;\s*(?=Classroom \d+:)/)
+  const items = parts
+    .map((part) => {
+      const m = part.match(/^Classroom (\d+):\s*(.*)$/)
+      return m ? { classroomId: m[1], reason: m[2].trim() } : null
+    })
+    .filter(Boolean)
+  return items.length > 0 ? { ranOutOfTime, items } : null
+}
+
+function FailureNotice({ reason, classrooms }) {
+  const [showList, setShowList] = useState(false)
+  const [showRaw, setShowRaw] = useState(false)
+  if (!reason) return null
+
+  const classroomName = (id) => {
+    const match = classrooms.find((c) => String(c.id) === String(id))
+    return match ? classroomLabel(match) : `Class #${id}`
+  }
+
+  const parsed = parseSequentialFailure(reason)
+
+  return (
+    <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3">
+      {parsed ? (
+        <>
+          <p className="text-sm font-medium text-red-800">
+            {parsed.items.length} class{parsed.items.length !== 1 ? 'es' : ''} couldn&rsquo;t be scheduled automatically
+            {parsed.ranOutOfTime ? ' \u2014 generation ran out of time before reaching all of them' : ''}.
+          </p>
+          <p className="mt-1 text-xs text-red-700">
+            This usually means a teacher is assigned to too many classes at once, or a class needs more lesson
+            periods than its bell schedule has room for.
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowList((v) => !v)}
+            className="mt-2 text-xs font-medium text-red-800 underline underline-offset-2"
+          >
+            {showList ? 'Hide affected classes' : 'Show affected classes'}
+          </button>
+          {showList && (
+            <ul className="mt-2 space-y-1.5 text-xs text-red-700">
+              {parsed.items.map((item) => (
+                <li key={item.classroomId}>
+                  <span className="font-medium">{classroomName(item.classroomId)}:</span>{' '}
+                  {simplifyReason(item.reason)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      ) : (
+        <p className="text-sm font-medium text-red-800">{simplifyReason(reason)}</p>
+      )}
+      <button
+        type="button"
+        onClick={() => setShowRaw((v) => !v)}
+        className="mt-2 block text-xs text-red-400 underline underline-offset-2"
+      >
+        {showRaw ? 'Hide technical details' : 'Show technical details'}
+      </button>
+      {showRaw && <p className="mt-1 whitespace-pre-wrap text-xs text-red-400">{reason}</p>}
+    </div>
+  )
 }
 
 /**
@@ -467,8 +589,29 @@ function CreateEntryModal({ classroom, period, assignments, rooms, job, onClose,
 }
 
 function ReadinessPanel({ readiness, loading, onRefresh }) {
-  const errors = readiness?.errors || []
-  const warnings = readiness?.warnings || []
+  // Errors and warnings are merged into one list (errors first) so a single
+  // pagination control covers both. Only READINESS_PAGE_SIZE rows render at
+  // a time regardless of how many issues readiness reports.
+  const [visibleCount, setVisibleCount] = useState(READINESS_PAGE_SIZE)
+
+  const allItems = useMemo(() => {
+    const errors = readiness?.errors || []
+    const warnings = readiness?.warnings || []
+    return [
+      ...errors.map((item, i) => ({ key: `e-${i}`, kind: 'error', message: item.message })),
+      ...warnings.map((item, i) => ({ key: `w-${i}`, kind: 'warning', message: item.message })),
+    ]
+  }, [readiness])
+
+  // A fresh readiness result (e.g., after clicking refresh, or switching
+  // term/year) collapses the list back to the first page.
+  useEffect(() => {
+    setVisibleCount(READINESS_PAGE_SIZE)
+  }, [readiness])
+
+  const visibleItems = allItems.slice(0, visibleCount)
+  const hiddenCount = allItems.length - visibleItems.length
+
   return (
     <Card className="p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -489,12 +632,42 @@ function ReadinessPanel({ readiness, loading, onRefresh }) {
       ) : (
         <div className="space-y-2 text-sm">
           {readiness?.ready && <p className="text-green-700">Ready to generate.</p>}
-          {errors.map((item, index) => (
-            <p key={`e-${index}`} className="text-red-700">{item.message}</p>
+          {visibleItems.map((item) => (
+            <p key={item.key} className={item.kind === 'error' ? 'text-red-700' : 'text-amber-700'}>
+              {item.message}
+            </p>
           ))}
-          {warnings.map((item, index) => (
-            <p key={`w-${index}`} className="text-amber-700">{item.message}</p>
-          ))}
+          {(hiddenCount > 0 || visibleCount > READINESS_PAGE_SIZE) && (
+            <div className="flex flex-wrap gap-3 pt-1">
+              {hiddenCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((c) => c + READINESS_PAGE_SIZE)}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 underline underline-offset-2"
+                >
+                  <ChevronDown size={12} /> Show more ({hiddenCount} remaining)
+                </button>
+              )}
+              {hiddenCount > READINESS_PAGE_SIZE && (
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount(allItems.length)}
+                  className="text-xs font-medium text-blue-600 underline underline-offset-2"
+                >
+                  Show all {allItems.length}
+                </button>
+              )}
+              {visibleCount > READINESS_PAGE_SIZE && (
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount(READINESS_PAGE_SIZE)}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 underline underline-offset-2"
+                >
+                  <ChevronUp size={12} /> Show less
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </Card>
@@ -898,7 +1071,7 @@ function AdminTimetablePage() {
   }, [fetchData, latestJob])
 
   const generate = async () => {
-    if (jobInProgress) return
+    if (jobInProgress || generating) return
     setGenerating(true)
     setGenerationStartedAt(Date.now())
     setElapsedSeconds(0)
@@ -1075,7 +1248,7 @@ function AdminTimetablePage() {
             <Button
               onClick={generate}
               loading={generating}
-              disabled={!readiness?.ready || jobInProgress}
+              disabled={!readiness?.ready || jobInProgress || generating}
               title={jobInProgress ? 'A generation job is already running' : undefined}
             >
               <Play size={16} /> Generate
@@ -1223,9 +1396,7 @@ function AdminTimetablePage() {
                   )}
                 </div>
               </div>
-              {latestJob.failure_reason && (
-                <p className="mt-2 text-sm text-red-700">{latestJob.failure_reason}</p>
-              )}
+              <FailureNotice reason={latestJob.failure_reason} classrooms={classrooms} />
             </>
           )}
         </Card>

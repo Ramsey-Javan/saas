@@ -47,11 +47,19 @@ export default function AddStaffPage() {
       } else {
         navigate('/staff')
       }
-    } catch (err) {
-      setError(err.response?.data?.detail || Object.values(err.response?.data || {}).flat()[0] || 'Failed to create staff member.')
-    } finally {
-      setSaving(false)
-    }
+      } catch (err) {
+        const data = err.response?.data
+        const fieldError = data ? Object.values(data).flat()[0] : null
+        setError(
+          (typeof fieldError === 'string' && fieldError) ||
+          (typeof data?.detail === 'string' && data.detail) ||
+          err.message ||                       // client.js already resolved a clean string
+          'Failed to create staff member.'
+        )
+      } finally {
+        setSaving(false)
+      
+      } 
   }
 
   return (

@@ -150,6 +150,11 @@ export default function RuleModal({
               Hard excluded periods
             </label>
           </div>
+          <p className="sm:col-span-2 -mt-2 text-xs text-gray-400">
+            When checked, the periods you select below can <span className="font-medium">never</span> be used for
+            this subject. Unchecked, they&rsquo;re only avoided when possible — the generator can still use one if
+            there&rsquo;s truly no other way to fit this subject in.
+          </p>
         </div>
 
         {nonBreakPeriods.length > 0 && (
